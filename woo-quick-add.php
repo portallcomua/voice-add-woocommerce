@@ -448,4 +448,277 @@ function vawc_page_main() {
         document.getElementById('btn_save').addEventListener('click', function () {
             var self = this;
             if (!C.CAN) { alert('Ліміт вичерпано!'); return; }
-            self.disabled = true; self.textContent = '
+            self.disabled = true; self.textContent = '⏳ ЗБЕРІГАЮ...';
+
+            var attrs = [];
+            document.querySelectorAll('.vawc_ar').forEach(function (row) {
+                var inp = row.querySelectorAll('input');
+                var k = inp[0].value.trim(), v = inp[1].value.trim();
+                if (k && v) attrs.push({ name: k, value: v });
+            });
+
+            var ptype = 'simple', vars = [];
+            if (C.PRO) {
+                var pt = document.getElementById('vawc_ptype');
+                if (pt) ptype = pt.value;
+                if (ptype === 'variable' && window.collectVariations) vars = window.collectVariations();
+            }
+
+            function doSave(finalPhotos) {
+                var fd = new FormData();
+                fd.append('action', 'vawc_save'); fd.append('nonce', C.NS);
+                fd.append('text', document.getElementById('vawc_ta').value);
+                fd.append('images', JSON.stringify(finalPhotos));
+                fd.append('attrs', JSON.stringify(attrs));
+                fd.append('type', ptype);
+                fd.append('variations', JSON.stringify(vars));
+
+                fetch(C.AJAX, { method: 'POST', body: fd }).then(r => r.json()).then(data => {
+                    if (data.success) {
+                        document.getElementById('vawc_msg').innerHTML = '<span style="color:green">✅ Створено! ID: ' + data.data.id + '</span>';
+                        photos = []; document.getElementById('vawc_gal').innerHTML = '';
+                        document.getElementById('vawc_attrs').innerHTML = '';
+                        document.getElementById('vawc_ta').value = C.TPL;
+                        var vr = document.getElementById('vawc_var_rows'); if (vr) vr.innerHTML = '';
+                    } else {
+                        document.getElementById('vawc_msg').innerHTML = '<span style="color:red">❌ ' + data.data + '</span>';
+                    }
+                }).finally(() => {
+                    self.disabled = false; self.textContent = C.DRAFT ? '➕ ЗБЕРЕГТИ ЯК ЧЕРНЕТКУ' : '➕ ОПУБЛІКУВАТИ';
+                });
+            }
+
+            if (C.HAS_RBG && getBg() !== 'original' && photos.length > 0) processPhotos(photos.slice(), doSave);
+            else doSave(photos.slice());
+        });
+
+        var btnExp = document.getElementById('btn_export');
+        if (btnExp) {
+            btnExp.addEventListener('click', function () {
+                var self = this; self.textContent = '⏳'; self.disabled = true;
+                var fd = new FormData(); fd.append('action', 'vawc_export'); fd.append('nonce', C.NE);
+                fetch(C.AJAX, { method: 'POST', body: fd }).then(r => r.blob()).then(b => {
+                    var u = URL.createObjectURL(b); var a = document.createElement('a'); a.href = u;
+                    a.download = 'wc-products-' + new Date().toISOString().split('T')[0] + '.csv';
+                    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u);
+                });
+                self.textContent = '📤 CSV'; self.disabled = false;
+            });
+        }
+    });
+    </script>
+    <?php
+}
+
+// =====================================================================
+// 9. AJAX: ЗБЕРЕЖЕННЯ
+// =====================================================================
+add_action('wp_ajax_vawc_save', function () {
+    if (!check_ajax_referer('vawc_save', 'nonce', false)) wp_send_json_error('Nonce');
+    if (!current_user_can('manage_woocommerce')) wp_send_json_error('Permission');
+
+    $raw = sanitize_textarea_field($_POST['text'] ?? '');
+    $imgs = json_decode(stripslashes($_POST['images'] ?? '[]'), true) ?: [];
+    $attrs = json_decode(stripslashes($_POST['attrs'] ?? '[]'), true) ?: [];
+    $ptype = sanitize_text_field($_POST['type'] ?? 'simple');
+    $vars = json_decode(stripslashes($_POST['variations'] ?? '[]'), true) ?: [];
+    $draft = get_option('vawc_draft', '1') === '1';
+
+    $data = [];
+    foreach (explode("\n", $raw) as $l) {
+        if (strpos($l, ':') !== false) { [$k, $v] = array_map('trim', explode(':', $l, 2)); if ($k && $v) $data[strtoupper($k)] = $v; }
+    }
+
+    $product = ($ptype === 'variable' && vawc_pro()) ? new WC_Product_Variable() : new WC_Product_Simple();
+    $product->set_status($draft ? 'draft' : 'publish');
+    $product->set_name($data['NAME'] ?? $data['НАЗВА'] ?? 'Товар ' . gmdate('H:i:s'));
+    if (!empty($data['PRICE'])) $product->set_regular_price(preg_replace('/[^0-9.]/', '', $data['PRICE']));
+    if (!empty($data['SALE'])) $product->set_sale_price(preg_replace('/[^0-9.]/', '', $data['SALE']));
+    if (!empty($data['DESCRIPTION'])) $product->set_description($data['DESCRIPTION']);
+    $pid = $product->save();
+
+    if (!empty($data['CATEGORY'])) {
+        $term = term_exists($data['CATEGORY'], 'product_cat') ?: wp_insert_term($data['CATEGORY'], 'product_cat');
+        if (!is_wp_error($term)) wp_set_object_terms($pid, (int)$term['term_id'], 'product_cat');
+    }
+    if (!empty($data['BRAND'])) {
+        foreach (['pwb-brand','product_brand','pa_brand'] as $tax) {
+            if (taxonomy_exists($tax)) {
+                $term = term_exists($data['BRAND'], $tax) ?: wp_insert_term($data['BRAND'], $tax);
+                if (!is_wp_error($term)) { wp_set_object_terms($pid, (int)$term['term_id'], $tax); break; }
+            }
+        }
+    }
+    if (!empty($data['TAGS'])) {
+        $ids = [];
+        foreach (array_filter(array_map('trim', explode(',', $data['TAGS']))) as $tn) {
+            $term = term_exists($tn, 'product_tag') ?: wp_insert_term($tn, 'product_tag');
+            if (!is_wp_error($term)) $ids[] = (int)$term['term_id'];
+        }
+        if ($ids) wp_set_object_terms($pid, $ids, 'product_tag');
+    }
+
+    $wca = [];
+    foreach ($attrs as $a) {
+        if (empty($a['name']) || empty($a['value'])) continue;
+        $attr_name = wc_clean($a['name']);
+        $taxonomy = wc_attribute_taxonomy_name($attr_name);
+        if (!taxonomy_exists($taxonomy)) {
+            $aid = wc_create_attribute(['name' => $attr_name, 'slug' => sanitize_title($attr_name), 'type' => 'select', 'order_by' => 'menu_order']);
+            if (!is_wp_error($aid)) { delete_transient('wc_attribute_taxonomies'); register_taxonomy($taxonomy, ['product'], []); }
+        }
+        $values = array_filter(array_map('trim', explode(',', $a['value'])));
+        foreach ($values as $val) { if (!term_exists($val, $taxonomy)) wp_insert_term($val, $taxonomy); }
+        $attr = new WC_Product_Attribute();
+        $attr->set_id(wc_attribute_taxonomy_id_by_name($attr_name));
+        $attr->set_name($taxonomy);
+        $attr->set_options($values);
+        $attr->set_visible(true);
+        $wca[] = $attr;
+    }
+
+    if ($ptype === 'variable' && vawc_pro() && !empty($vars)) {
+        $varmap = []; $price_map = [];
+        foreach ($vars as $var) {
+            $vn = $var['name'] ?? ''; $vvals = $var['values'] ?? []; $vprices = $var['prices'] ?? [];
+            if (!$vn || empty($vvals)) continue;
+            $attr_name = wc_clean($vn);
+            $taxonomy = wc_attribute_taxonomy_name($attr_name);
+            if (!taxonomy_exists($taxonomy)) {
+                $aid = wc_create_attribute(['name' => $attr_name, 'slug' => sanitize_title($attr_name), 'type' => 'select', 'order_by' => 'menu_order']);
+                if (!is_wp_error($aid)) { delete_transient('wc_attribute_taxonomies'); register_taxonomy($taxonomy, ['product'], []); }
+            }
+            foreach ($vvals as $val) { if (!term_exists(trim($val), $taxonomy)) wp_insert_term(trim($val), $taxonomy); }
+            $va = new WC_Product_Attribute();
+            $va->set_id(wc_attribute_taxonomy_id_by_name($attr_name));
+            $va->set_name($taxonomy);
+            $va->set_options(array_filter(array_map('trim', $vvals)));
+            $va->set_visible(true);
+            $va->set_variation(true);
+            $wca[] = $va;
+            $varmap[$vn] = array_values(array_filter(array_map('trim', $vvals)));
+            foreach ($vvals as $i => $vv) { $vv = trim($vv); $p = trim($vprices[$i] ?? ''); if ($vv && $p) $price_map[$vn.'|'.$vv] = $p; }
+        }
+        if ($wca) { $product->set_attributes($wca); $product->save(); }
+        $combos = [[]];
+        foreach ($varmap as $vn => $opts) {
+            $new = [];
+            foreach ($combos as $c) foreach ($opts as $o) $new[] = array_merge($c, [$vn => $o]);
+            $combos = $new;
+        }
+        foreach ($combos as $combo) {
+            $v = new WC_Product_Variation();
+            $v->set_parent_id($pid); $v->set_status('publish');
+            $v_price = $data['PRICE'] ?? '';
+            foreach ($combo as $cn => $cv) { if (isset($price_map[$cn.'|'.$cv])) { $v_price = $price_map[$cn.'|'.$cv]; break; } }
+            if ($v_price) $v->set_regular_price(preg_replace('/[^0-9.]/', '', $v_price));
+            $va2 = [];
+            foreach ($combo as $n => $val) $va2[wc_attribute_taxonomy_name($n)] = $val;
+            $v->set_attributes($va2); $v->save();
+        }
+    } else {
+        if ($wca) { $product->set_attributes($wca); $product->save(); }
+    }
+
+    require_once ABSPATH . 'wp-admin/includes/image.php';
+    foreach ($imgs as $i => $b64) {
+        $is_png = strpos($b64, 'data:image/png') !== false;
+        $img = base64_decode(preg_replace('#^data:image/\w+;base64,#i', '', $b64));
+        $ext = $is_png ? 'png' : 'jpg'; $mime = $is_png ? 'image/png' : 'image/jpeg';
+        $file = wp_upload_bits('vawc_' . $pid . '_' . time() . '_' . $i . '.' . $ext, null, $img);
+        if ($file['error']) continue;
+        $aid = wp_insert_attachment(['post_mime_type' => $mime, 'post_status' => 'inherit'], $file['file'], $pid);
+        wp_update_attachment_metadata($aid, wp_generate_attachment_metadata($aid, $file['file']));
+        if ($i === 0) set_post_thumbnail($pid, $aid);
+    }
+
+    vawc_inc();
+    wp_send_json_success(['id' => $pid]);
+});
+
+// =====================================================================
+// 10. AJAX: REMOVE.BG
+// =====================================================================
+add_action('wp_ajax_vawc_remove_bg', function () {
+    if (!check_ajax_referer('vawc_save', 'nonce', false)) wp_send_json_error('Nonce');
+    $api = get_option('vawc_rbg_api', '');
+    if (!$api) wp_send_json_error('No API key');
+    $b64 = $_POST['image'] ?? ''; $bg = sanitize_text_field($_POST['bg'] ?? 'transparent');
+    if (!$b64) wp_send_json_error('No image');
+    $img_data = base64_decode(preg_replace('#^data:image/\w+;base64,#i', '', str_replace(' ', '+', $b64)));
+    $r = wp_remote_post('https://api.remove.bg/v1.0/removebg', [
+        'headers' => ['X-Api-Key' => $api],
+        'body'    => ['image_file_b64' => base64_encode($img_data), 'size' => 'auto', 'format' => 'png', 'bg_color' => ($bg === 'transparent' ? '' : $bg)],
+        'timeout' => 30,
+    ]);
+    if (is_wp_error($r)) wp_send_json_error($r->get_error_message());
+    $code = wp_remote_retrieve_response_code($r);
+    if ($code !== 200) { $b = json_decode(wp_remote_retrieve_body($r), true); wp_send_json_error($b['errors'][0]['title'] ?? 'HTTP '.$code); }
+    wp_send_json_success(['image' => 'data:image/png;base64,'.base64_encode(wp_remote_retrieve_body($r))]);
+});
+
+// =====================================================================
+// 11. AJAX: ЕКСПОРТ CSV
+// =====================================================================
+add_action('wp_ajax_vawc_export', function () {
+    if (!check_ajax_referer('vawc_export', 'nonce', false)) wp_die('Nonce');
+    if (!current_user_can('manage_woocommerce')) wp_die('Permission');
+
+    $products = wc_get_products(['limit' => -1, 'status' => 'any', 'return' => 'objects']);
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="wc-import-'.gmdate('Y-m-d').'.csv"');
+    $out = fopen('php://output', 'w');
+    fprintf($out, chr(0xEF).chr(0xBB).chr(0xBF));
+
+    $headers = [
+        'ID', 'Type', 'SKU', 'Name', 'Published', 'Is featured?', 'Visibility in catalog',
+        'Short description', 'Description', 'Date sale price starts', 'Date sale price ends',
+        'Tax status', 'Tax class', 'In stock?', 'Stock', 'Low stock amount', 'Backorders allowed?',
+        'Sold individually?', 'Weight (kg)', 'Length (cm)', 'Width (cm)', 'Height (cm)',
+        'Allow customer reviews?', 'Purchase note', 'Sale price', 'Regular price',
+        'Categories', 'Tags', 'Shipping class', 'Images', 'Download limit', 'Download expiry',
+        'Parent', 'Grouped products', 'Upsells', 'Cross-sells', 'External URL', 'Button text', 'Position',
+        'Attribute 1 name', 'Attribute 1 value(s)', 'Attribute 1 visible', 'Attribute 1 global',
+        'Attribute 2 name', 'Attribute 2 value(s)', 'Attribute 2 visible', 'Attribute 2 global',
+        'Attribute 3 name', 'Attribute 3 value(s)', 'Attribute 3 visible', 'Attribute 3 global',
+    ];
+    fputcsv($out, $headers);
+
+    foreach ($products as $p) {
+        $pid = $p->get_id();
+        $cats = implode(', ', wp_get_object_terms($pid, 'product_cat', ['fields' => 'names']));
+        $tgs  = implode(', ', wp_get_object_terms($pid, 'product_tag', ['fields' => 'names']));
+        $imgs = [];
+        if ($p->get_image_id()) $imgs[] = wp_get_attachment_url($p->get_image_id());
+        foreach ($p->get_gallery_image_ids() as $gi) if ($gi) $imgs[] = wp_get_attachment_url($gi);
+
+        $as = array_values($p->get_attributes());
+        $attr_cols = [];
+        for ($i = 0; $i < 3; $i++) {
+            if (isset($as[$i])) {
+                $attr_cols[] = $as[$i]->get_name();
+                $attr_cols[] = implode(', ', $as[$i]->get_options());
+                $attr_cols[] = $as[$i]->get_visible() ? 1 : 0;
+                $attr_cols[] = $as[$i]->get_id() ? 1 : 0;
+            } else {
+                $attr_cols[] = ''; $attr_cols[] = ''; $attr_cols[] = 1; $attr_cols[] = 0;
+            }
+        }
+
+        $row = [
+            $pid, $p->get_type(), $p->get_sku(), $p->get_name(), $p->get_status() === 'publish' ? 1 : 0,
+            $p->is_featured() ? 1 : 0, 'visible', $p->get_short_description(), $p->get_description(),
+            '', '', $p->get_tax_status(), $p->get_tax_class(), $p->is_in_stock() ? 1 : 0,
+            $p->get_stock_quantity() ?? '', $p->get_low_stock_amount() ?? '', $p->get_backorders(),
+            $p->get_sold_individually() ? 1 : 0, $p->get_weight(), $p->get_length(), $p->get_width(), $p->get_height(),
+            $p->get_reviews_allowed() ? 1 : 0, $p->get_purchase_note(), $p->get_sale_price(), $p->get_regular_price(),
+            $cats, $tgs, $p->get_shipping_class(), implode(', ', $imgs), $p->get_download_limit(), $p->get_download_expiry(),
+            $p->get_parent_id(), '', implode(', ', $p->get_upsell_ids()), implode(', ', $p->get_cross_sell_ids()),
+            $p->get_product_url(), $p->get_button_text(), ''
+        ];
+        $row = array_merge($row, $attr_cols);
+        fputcsv($out, $row);
+    }
+    fclose($out);
+    exit;
+});
