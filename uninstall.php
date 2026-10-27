@@ -8,3 +8,4 @@ foreach ( array( 'vawc_hub', 'vawc_pro', 'vawc_draft', 'vawc_rbg_api', 'vawc_lan
 }
 delete_metadata( 'user', 0, 'vawc_ops', '', true );
 delete_metadata( 'user', 0, 'vawc_pro_since', '', true );
+
