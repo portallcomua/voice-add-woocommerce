@@ -233,7 +233,7 @@ function vawc_ensure_global_attr( $label ) {
 	delete_transient( 'wc_attribute_taxonomies' );
 	$tax = wc_attribute_taxonomy_name( $slug );
 	if ( ! taxonomy_exists( $tax ) ) {
-		register_taxonomy( $tax, apply_filters( 'woocommerce_taxonomy_objects_' . $tax, array( 'product' ) ), array( 'labels' => array( 'name' => $label ), 'hierarchical' => false, 'show_ui' => false, 'query_var' => true, 'rewrite' => false, 'public' => false ) );
+		register_taxonomy( $tax, array( 'product' ), array( 'labels' => array( 'name' => $label ), 'hierarchical' => false, 'show_ui' => false, 'query_var' => true, 'rewrite' => false, 'public' => false ) );
 	}
 	return $tax;
 }
