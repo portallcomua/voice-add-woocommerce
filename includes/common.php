@@ -2,7 +2,7 @@
 /**
  * Спільне ядро Voice ADD (Voice ADD for WooCommerce PRO).
  * Мова, роль, права, інтеграція з Pay Box, оновлення з GitHub, налаштування,
- * головна сторінка, інструкції, remove.bg, CSV, збереження.
+ * головна сторінка, інструкції, збереження.
  */
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
@@ -841,12 +841,13 @@ function vawc_ajax_guard() {
 }
 
 add_action( 'wp_ajax_vawc_save', function () {
+	check_ajax_referer( 'vawc_nonce', 'nonce' );
 	vawc_ajax_guard();
 	if ( ! vawc_can_create( 1 ) ) {
 		wp_send_json_error( vawc_t( 'Безкоштовний ліміт вичерпано. Придбайте PRO.', 'Free limit reached. Please buy PRO.' ) );
 	}
 	$raw  = sanitize_textarea_field( wp_unslash( isset( $_POST['text'] ) ? $_POST['text'] : '' ) );
-	$imgs = json_decode( wp_unslash( isset( $_POST['images'] ) ? $_POST['images'] : '[]' ), true );
+	$imgs = json_decode( sanitize_text_field( wp_unslash( isset( $_POST['images'] ) ? $_POST['images'] : '[]' ) ), true );
 	$imgs = is_array( $imgs ) ? $imgs : array();
 
 	$res = vawc_create_item( vawc_parse_text( $raw ), $imgs, array() );
