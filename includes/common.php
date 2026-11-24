@@ -40,6 +40,8 @@ class VAWC_Updater {
 		$this->repo     = $repo;
 		$this->version  = $version;
 		add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'check' ) );
+		// Підхоплюємо оновлення також із уже збереженого кешу WordPress.
+		add_filter( 'site_transient_update_plugins', array( $this, 'check' ) );
 		add_filter( 'plugins_api', array( $this, 'info' ), 10, 3 );
 		add_filter( 'upgrader_source_selection', array( $this, 'fix_dir' ), 10, 4 );
 	}
@@ -117,6 +119,12 @@ class VAWC_Updater {
 	public function check( $t ) {
 		if ( ! is_object( $t ) ) {
 			return $t;
+		}
+		if ( ! isset( $t->response ) || ! is_array( $t->response ) ) {
+			$t->response = array();
+		}
+		if ( ! isset( $t->no_update ) || ! is_array( $t->no_update ) ) {
+			$t->no_update = array();
 		}
 		$r = $this->remote();
 		if ( $r && ! empty( $r->zip ) && version_compare( $this->version, $r->version, '<' ) ) {
