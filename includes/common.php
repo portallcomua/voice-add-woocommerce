@@ -113,6 +113,60 @@ class VAWC_Updater {
 		set_transient( $this->key(), $out, 10 * MINUTE_IN_SECONDS );
 		return $out;
 	}
+
+	public function check( $t ) {
+		if ( ! is_object( $t ) ) {
+			return $t;
+		}
+		$r = $this->remote();
+		if ( $r && ! empty( $r->zip ) && version_compare( $this->version, $r->version, '<' ) ) {
+			$t->response[ $this->basename ] = (object) array(
+				'slug'        => $this->slug,
+				'plugin'      => $this->basename,
+				'new_version' => $r->version,
+				'package'     => $r->zip,
+				'url'         => $r->url,
+			);
+			unset( $t->no_update[ $this->basename ] );
+		}
+		return $t;
+	}
+
+	public function info( $res, $action, $args ) {
+		if ( 'plugin_information' !== $action || empty( $args->slug ) || $args->slug !== $this->slug ) {
+			return $res;
+		}
+		$r = $this->remote();
+		if ( ! $r ) {
+			return $res;
+		}
+		return (object) array(
+			'name'          => 'Voice ADD for WooCommerce PRO',
+			'slug'          => $this->slug,
+			'version'       => $r->version,
+			'download_link' => $r->zip,
+			'requires_php'  => '7.4',
+			'sections'      => array(
+				'description' => 'Голосове додавання товарів у WooCommerce з фото, прибиранням фону, атрибутами та варіаціями.',
+			),
+		);
+	}
+
+	public function fix_dir( $source, $remote_source, $upgrader, $hook_extra ) {
+		if ( empty( $hook_extra['plugin'] ) || $hook_extra['plugin'] !== $this->basename ) {
+			return $source;
+		}
+		global $wp_filesystem;
+		$new = trailingslashit( $remote_source ) . $this->slug . '/';
+		if ( untrailingslashit( $source ) === untrailingslashit( $new ) ) {
+			return $source;
+		}
+		if ( $wp_filesystem && $wp_filesystem->move( $source, $new, true ) ) {
+			return $new;
+		}
+		return $source;
+	}
+
 }
 
 function vawc_updater() {
