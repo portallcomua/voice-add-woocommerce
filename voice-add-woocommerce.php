@@ -3,7 +3,7 @@
  * Plugin Name: Voice ADD for WooCommerce PRO
  * Plugin URI:  https://uaserver.pp.ua/voice-add-woocommerce-pro/
  * Description: Голосове додавання товарів у WooCommerce з фото, прибиранням фону, атрибутами та варіаціями.
- * Version:     3.3.6
+ * Version:     3.3.7
  * Author:      UAServer
  * Author URI:  https://uaserver.pp.ua/
  * License:     GPLv2 or later
@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'VAWC_PRO_LOADED', true );
-define( 'VAWC_VERSION', '3.3.6' );
+define( 'VAWC_VERSION', '3.3.7' );
 define( 'VAWC_FILE', __FILE__ );
 define( 'VAWC_DIR', plugin_dir_path( __FILE__ ) );
 define( 'VAWC_URL', plugin_dir_url( __FILE__ ) );
