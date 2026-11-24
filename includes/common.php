@@ -33,23 +33,20 @@ function vawc_norm( $s ) {
 /* ====================================================================== */
 class VAWC_Updater {
 	private $basename, $slug, $repo, $version;
+	private $last_error = '';
 
 	public function __construct( $file, $repo, $version ) {
 		$this->basename = plugin_basename( $file );
-		$this->slug     = dirname( $this->basename );
-		$this->repo     = $repo;
-		$this->version  = $version;
+		$this->slug = dirname( $this->basename );
+		$this->repo = $repo;
+		$this->version = $version;
 		add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'check' ) );
-		// Підхоплюємо оновлення також із уже збереженого кешу WordPress.
 		add_filter( 'site_transient_update_plugins', array( $this, 'check' ) );
 		add_filter( 'plugins_api', array( $this, 'info' ), 10, 3 );
 		add_filter( 'upgrader_source_selection', array( $this, 'fix_dir' ), 10, 4 );
 	}
 
 	private function key() { return 'vawc_gh_' . md5( $this->repo ); }
-
-	private $last_error = '';
-
 	public function last_error() { return $this->last_error; }
 
 	public function flush() {
@@ -61,79 +58,81 @@ class VAWC_Updater {
 		$this->last_error = '';
 		$cached = get_transient( $this->key() );
 		if ( false !== $cached ) {
-			return $cached ? $cached : null;
+			if ( is_object( $cached ) && isset( $cached->_vawc_error ) ) {
+				$this->last_error = $cached->_vawc_error;
+				return null;
+			}
+			return ( is_object( $cached ) && ! empty( $cached->version ) && ! empty( $cached->zip ) ) ? $cached : null;
 		}
+
 		$resp = wp_remote_get(
 			'https://api.github.com/repos/' . $this->repo . '/releases/latest',
 			array(
-				'timeout'     => 15,
+				'timeout' => 12,
 				'redirection' => 3,
-				'headers'     => array(
-					'Accept'     => 'application/vnd.github+json',
+				'headers' => array(
+					'Accept' => 'application/vnd.github+json',
 					'User-Agent' => 'Voice-ADD-WordPress-Updater',
 				),
 			)
 		);
+
+		$error = '';
 		if ( is_wp_error( $resp ) ) {
-			$this->last_error = $resp->get_error_message();
-			return null;
-		}
-		$code = (int) wp_remote_retrieve_response_code( $resp );
-		$body = wp_remote_retrieve_body( $resp );
-		if ( 200 !== $code ) {
-			$api_error = json_decode( $body );
-			$this->last_error = ( $api_error && ! empty( $api_error->message ) )
-				? 'GitHub HTTP ' . $code . ': ' . sanitize_text_field( $api_error->message )
-				: 'GitHub HTTP ' . $code;
-			return null;
-		}
-		$d = json_decode( $body );
-		if ( ! $d || empty( $d->tag_name ) ) {
-			$this->last_error = 'GitHub повернув некоректні дані релізу.';
-			return null;
-		}
-		$zip = ! empty( $d->zipball_url ) ? $d->zipball_url : '';
-		if ( ! empty( $d->assets ) ) {
-			foreach ( $d->assets as $a ) {
-				if ( isset( $a->name, $a->browser_download_url ) && preg_match( '/\.zip$/i', $a->name ) ) {
-					$zip = $a->browser_download_url;
-					if ( $a->name === $this->slug . '.zip' ) {
-						break;
+			$error = $resp->get_error_message();
+		} else {
+			$code = (int) wp_remote_retrieve_response_code( $resp );
+			$body = wp_remote_retrieve_body( $resp );
+			if ( 200 !== $code ) {
+				$j = json_decode( $body );
+				$error = ( $j && ! empty( $j->message ) )
+					? 'GitHub HTTP ' . $code . ': ' . sanitize_text_field( $j->message )
+					: 'GitHub HTTP ' . $code;
+			} else {
+				$d = json_decode( $body );
+				if ( ! $d || empty( $d->tag_name ) ) {
+					$error = 'GitHub повернув некоректні дані релізу.';
+				} else {
+					$tag = (string) $d->tag_name;
+					// Direct GitHub archive URL: no extra API call for zipball_url.
+					$zip = 'https://github.com/' . $this->repo . '/archive/refs/tags/' . rawurlencode( $tag ) . '.zip';
+					if ( ! empty( $d->assets ) ) {
+						foreach ( $d->assets as $asset ) {
+							if ( isset( $asset->name, $asset->browser_download_url ) && preg_match( '/\.zip$/i', $asset->name ) ) {
+								$zip = $asset->browser_download_url;
+								if ( $asset->name === $this->slug . '.zip' ) break;
+							}
+						}
 					}
+					$out = (object) array(
+						'version' => ltrim( $tag, 'vV' ),
+						'zip' => esc_url_raw( $zip ),
+						'url' => ! empty( $d->html_url ) ? esc_url_raw( $d->html_url ) : '',
+					);
+					set_transient( $this->key(), $out, 10 * MINUTE_IN_SECONDS );
+					return $out;
 				}
 			}
 		}
-		if ( ! $zip ) {
-			$this->last_error = 'У релізі GitHub немає ZIP-архіву для завантаження.';
-			return null;
-		}
-		$out = (object) array(
-			'version' => ltrim( $d->tag_name, 'vV' ),
-			'zip'     => esc_url_raw( $zip ),
-			'url'     => ! empty( $d->html_url ) ? esc_url_raw( $d->html_url ) : '',
-		);
-		set_transient( $this->key(), $out, 10 * MINUTE_IN_SECONDS );
-		return $out;
+
+		$this->last_error = $error ? $error : 'Не вдалося перевірити реліз GitHub.';
+		$ttl = ( false !== strpos( $this->last_error, 'HTTP 403' ) ) ? HOUR_IN_SECONDS : 10 * MINUTE_IN_SECONDS;
+		set_transient( $this->key(), (object) array( '_vawc_error' => $this->last_error ), $ttl );
+		return null;
 	}
 
 	public function check( $t ) {
-		if ( ! is_object( $t ) ) {
-			return $t;
-		}
-		if ( ! isset( $t->response ) || ! is_array( $t->response ) ) {
-			$t->response = array();
-		}
-		if ( ! isset( $t->no_update ) || ! is_array( $t->no_update ) ) {
-			$t->no_update = array();
-		}
+		if ( ! is_object( $t ) ) return $t;
+		$t->response = isset( $t->response ) ? (array) $t->response : array();
+		$t->no_update = isset( $t->no_update ) ? (array) $t->no_update : array();
 		$r = $this->remote();
-		if ( $r && ! empty( $r->zip ) && version_compare( $this->version, $r->version, '<' ) ) {
+		if ( $r && version_compare( $this->version, $r->version, '<' ) ) {
 			$t->response[ $this->basename ] = (object) array(
-				'slug'        => $this->slug,
-				'plugin'      => $this->basename,
+				'slug' => $this->slug,
+				'plugin' => $this->basename,
 				'new_version' => $r->version,
-				'package'     => $r->zip,
-				'url'         => $r->url,
+				'package' => $r->zip,
+				'url' => $r->url,
 			);
 			unset( $t->no_update[ $this->basename ] );
 		}
@@ -141,36 +140,28 @@ class VAWC_Updater {
 	}
 
 	public function info( $res, $action, $args ) {
-		if ( 'plugin_information' !== $action || empty( $args->slug ) || $args->slug !== $this->slug ) {
-			return $res;
-		}
+		if ( 'plugin_information' !== $action || empty( $args->slug ) || $args->slug !== $this->slug ) return $res;
 		$r = $this->remote();
-		if ( ! $r ) {
-			return $res;
-		}
+		if ( ! $r ) return $res;
 		return (object) array(
-			'name'          => 'Voice ADD for WooCommerce PRO',
-			'slug'          => $this->slug,
-			'version'       => $r->version,
+			'name' => 'Voice ADD for WooCommerce PRO',
+			'slug' => $this->slug,
+			'version' => $r->version,
 			'download_link' => $r->zip,
-			'requires_php'  => '7.4',
-			'sections'      => array(
-				'description' => 'Голосове додавання товарів у WooCommerce з фото, прибиранням фону, атрибутами та варіаціями.',
-			),
+			'requires_php' => '7.4',
+			'sections' => array( 'description' => 'Голосове додавання товарів у WooCommerce з фото, прибиранням фону, атрибутами та варіаціями.' ),
 		);
 	}
 
 	public function fix_dir( $source, $remote_source, $upgrader, $hook_extra ) {
-		if ( empty( $hook_extra['plugin'] ) || $hook_extra['plugin'] !== $this->basename ) {
-			return $source;
-		}
+		if ( empty( $hook_extra['plugin'] ) || $hook_extra['plugin'] !== $this->basename ) return $source;
 		global $wp_filesystem;
-		$new = trailingslashit( $remote_source ) . $this->slug . '/';
-		if ( untrailingslashit( $source ) === untrailingslashit( $new ) ) {
-			return $source;
-		}
-		if ( $wp_filesystem && $wp_filesystem->move( $source, $new, true ) ) {
-			return $new;
+		$target = trailingslashit( $remote_source ) . $this->slug . '/';
+		if ( untrailingslashit( $source ) === untrailingslashit( $target ) ) return $source;
+		// GitHub tag archives have generated folder names; normalize before installation.
+		if ( $wp_filesystem && $wp_filesystem->is_dir( $source ) ) {
+			if ( $wp_filesystem->is_dir( $target ) ) $wp_filesystem->delete( $target, true );
+			if ( $wp_filesystem->move( $source, $target, true ) ) return $target;
 		}
 		return $source;
 	}
