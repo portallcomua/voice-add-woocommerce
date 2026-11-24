@@ -46,81 +46,72 @@ class VAWC_Updater {
 
 	private function key() { return 'vawc_gh_' . md5( $this->repo ); }
 
-	public function flush() { delete_transient( $this->key() ); }
+	private $last_error = '';
+
+	public function last_error() { return $this->last_error; }
+
+	public function flush() {
+		delete_transient( $this->key() );
+		$this->last_error = '';
+	}
 
 	public function remote() {
+		$this->last_error = '';
 		$cached = get_transient( $this->key() );
 		if ( false !== $cached ) {
 			return $cached ? $cached : null;
 		}
 		$resp = wp_remote_get(
 			'https://api.github.com/repos/' . $this->repo . '/releases/latest',
-			array( 'timeout' => 8, 'headers' => array( 'Accept' => 'application/vnd.github+json', 'User-Agent' => 'WordPress/' . $this->slug ) )
+			array(
+				'timeout'     => 15,
+				'redirection' => 3,
+				'headers'     => array(
+					'Accept'     => 'application/vnd.github+json',
+					'User-Agent' => 'Voice-ADD-WordPress-Updater',
+				),
+			)
 		);
-		$out = null;
-		if ( ! is_wp_error( $resp ) && 200 === (int) wp_remote_retrieve_response_code( $resp ) ) {
-			$d = json_decode( wp_remote_retrieve_body( $resp ) );
-			if ( $d && isset( $d->tag_name ) ) {
-				$zip = isset( $d->zipball_url ) ? $d->zipball_url : '';
-				if ( ! empty( $d->assets ) ) {
-					foreach ( $d->assets as $a ) {
-						if ( isset( $a->name, $a->browser_download_url ) && preg_match( '/\.zip$/i', $a->name ) ) {
-							$zip = $a->browser_download_url;
-							if ( $a->name === $this->slug . '.zip' ) {
-								break;
-							}
-						}
+		if ( is_wp_error( $resp ) ) {
+			$this->last_error = $resp->get_error_message();
+			return null;
+		}
+		$code = (int) wp_remote_retrieve_response_code( $resp );
+		$body = wp_remote_retrieve_body( $resp );
+		if ( 200 !== $code ) {
+			$api_error = json_decode( $body );
+			$this->last_error = ( $api_error && ! empty( $api_error->message ) )
+				? 'GitHub HTTP ' . $code . ': ' . sanitize_text_field( $api_error->message )
+				: 'GitHub HTTP ' . $code;
+			return null;
+		}
+		$d = json_decode( $body );
+		if ( ! $d || empty( $d->tag_name ) ) {
+			$this->last_error = 'GitHub повернув некоректні дані релізу.';
+			return null;
+		}
+		$zip = ! empty( $d->zipball_url ) ? $d->zipball_url : '';
+		if ( ! empty( $d->assets ) ) {
+			foreach ( $d->assets as $a ) {
+				if ( isset( $a->name, $a->browser_download_url ) && preg_match( '/\.zip$/i', $a->name ) ) {
+					$zip = $a->browser_download_url;
+					if ( $a->name === $this->slug . '.zip' ) {
+						break;
 					}
 				}
-				$out = (object) array( 'version' => ltrim( $d->tag_name, 'vV' ), 'zip' => $zip, 'url' => $d->html_url );
 			}
 		}
-		set_transient( $this->key(), $out ? $out : 0, 6 * HOUR_IN_SECONDS );
-		return $out;
-	}
-
-	public function check( $t ) {
-		if ( ! is_object( $t ) ) {
-			return $t;
+		if ( ! $zip ) {
+			$this->last_error = 'У релізі GitHub немає ZIP-архіву для завантаження.';
+			return null;
 		}
-		$r = $this->remote();
-		if ( $r && $r->zip && version_compare( $this->version, $r->version, '<' ) ) {
-			$t->response[ $this->basename ] = (object) array(
-				'slug' => $this->slug, 'plugin' => $this->basename, 'new_version' => $r->version,
-				'package' => $r->zip, 'url' => $r->url,
-			);
-		}
-		return $t;
-	}
-
-	public function info( $res, $action, $args ) {
-		if ( 'plugin_information' !== $action || empty( $args->slug ) || $args->slug !== $this->slug ) {
-			return $res;
-		}
-		$r = $this->remote();
-		if ( ! $r ) {
-			return $res;
-		}
-		return (object) array(
-			'name' => 'Voice ADD for WooCommerce PRO', 'slug' => $this->slug, 'version' => $r->version,
-			'download_link' => $r->zip, 'requires_php' => '7.4',
-			'sections' => array( 'description' => 'Голосове додавання товарів у WooCommerce з фото, прибиранням фону, атрибутами та варіаціями.' ),
+		$out = (object) array(
+			'version' => ltrim( $d->tag_name, 'vV' ),
+			'zip'     => esc_url_raw( $zip ),
+			'url'     => ! empty( $d->html_url ) ? esc_url_raw( $d->html_url ) : '',
 		);
-	}
-
-	public function fix_dir( $source, $remote_source, $upgrader, $hook_extra ) {
-		if ( empty( $hook_extra['plugin'] ) || $hook_extra['plugin'] !== $this->basename ) {
-			return $source;
-		}
-		global $wp_filesystem;
-		$new = trailingslashit( $remote_source ) . $this->slug . '/';
-		if ( untrailingslashit( $source ) === untrailingslashit( $new ) ) {
-			return $source;
-		}
-		if ( $wp_filesystem && $wp_filesystem->move( $source, $new, true ) ) {
-			return $new;
-		}
-		return $source;
+		set_transient( $this->key(), $out, 10 * MINUTE_IN_SECONDS );
+		return $out;
 	}
 }
 
@@ -497,10 +488,13 @@ function vawc_page_settings() {
 		delete_site_transient( 'update_plugins' );
 		wp_update_plugins();
 		$r = vawc_updater()->remote();
-		if ( $r && version_compare( VAWC_VERSION, $r->version, '<' ) ) {
-			$msg = '<div class="notice notice-info"><p>' . sprintf( esc_html( vawc_t( 'Доступна нова версія %s. Оновіть на сторінці «Плагіни».', 'New version %s is available. Update it on the Plugins page.' ) ), '<strong>' . esc_html( $r->version ) . '</strong>' ) . '</p></div>';
+		if ( ! $r ) {
+			$error = vawc_updater()->last_error();
+			$msg = '<div class="notice notice-error is-dismissible"><p><strong>' . esc_html( vawc_t( 'Не вдалося перевірити GitHub:', 'GitHub check failed:' ) ) . '</strong> ' . esc_html( $error ? $error : vawc_t( 'Невідома помилка. Перевірте доступ сервера до api.github.com.', 'Unknown error. Check server access to api.github.com.' ) ) . '</p></div>';
+		} elseif ( version_compare( VAWC_VERSION, $r->version, '<' ) ) {
+			$msg = '<div class="notice notice-info is-dismissible"><p>' . sprintf( esc_html( vawc_t( 'GitHub доступний. Знайдено версію %1$s (встановлено %2$s). Перейдіть на сторінку «Плагіни» та натисніть «Оновити».', 'GitHub is reachable. Version %1$s found (installed %2$s). Open Plugins and click Update.' ) ), '<strong>' . esc_html( $r->version ) . '</strong>', '<strong>' . esc_html( VAWC_VERSION ) . '</strong>' ) . '</p></div>';
 		} else {
-			$msg = '<div class="notice notice-success"><p>' . esc_html( vawc_t( 'У вас остання версія.', 'You have the latest version.' ) ) . '</p></div>';
+			$msg = '<div class="notice notice-success is-dismissible"><p>' . sprintf( esc_html( vawc_t( 'Перевірку завершено. Встановлена версія: %1$s. Останній реліз GitHub: %2$s. Оновлення не потрібне.', 'Check complete. Installed version: %1$s. Latest GitHub release: %2$s. No update is needed.' ) ), '<strong>' . esc_html( VAWC_VERSION ) . '</strong>', '<strong>' . esc_html( $r->version ) . '</strong>' ) . '</p></div>';
 		}
 	}
 
