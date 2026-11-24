@@ -395,7 +395,14 @@
 				say(msg, html, 'is-ok');
 				photos = []; gal.innerHTML = ''; if (bgWrap) { bgWrap.style.display = 'none'; }
 				ta.value = C.tpl; activeLine = -1; activeDef = null; box.hidden = true;
-				if (typeof d.left === 'number' && d.left >= 0 && $('va_left')) { $('va_left').textContent = d.left; }
+				if (typeof d.left === 'number' && d.left >= 0) {
+					if ($('va_left')) { $('va_left').textContent = d.left; }
+					var createdCounter = $('va_created');
+					if (createdCounter) {
+						var totalLimit = parseInt(createdCounter.getAttribute('data-limit') || '25', 10);
+						createdCounter.textContent = Math.max(0, totalLimit - d.left);
+					}
+				}
 			} else {
 				say(msg, '❌ ' + esc(String(res.data || 'Error')), 'is-err');
 			}
@@ -421,7 +428,14 @@
 					if (d.stopped) { h += '<br>⚠️ ' + S.limit; }
 					(d.errors || []).forEach(function (e) { h += '<br>• ' + esc(e); });
 					say(out, h, d.failed ? 'is-err' : 'is-ok');
-					if (typeof d.left === 'number' && d.left >= 0 && $('va_left')) { $('va_left').textContent = d.left; }
+					if (typeof d.left === 'number' && d.left >= 0) {
+					if ($('va_left')) { $('va_left').textContent = d.left; }
+					var createdCounter = $('va_created');
+					if (createdCounter) {
+						var totalLimit = parseInt(createdCounter.getAttribute('data-limit') || '25', 10);
+						createdCounter.textContent = Math.max(0, totalLimit - d.left);
+					}
+				}
 				} else { say(out, '❌ ' + esc(String(r.data || 'Error')), 'is-err'); }
 			} catch (e) { say(out, '❌ ' + S.netErr, 'is-err'); }
 			imp.disabled = false;
