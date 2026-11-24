@@ -676,7 +676,9 @@ function vawc_page_main() {
 	if ( ! current_user_can( 'vawc_use' ) ) {
 		wp_die( esc_html( vawc_t( 'Доступ заборонено', 'Access denied' ) ) );
 	}
-	$pro     = vawc_is_pro();
+	// Кожне відкриття сторінки виконує актуальну перевірку через UA Pay Box.
+	$pst     = vawc_pro_state( true );
+	$pro     = isset( $pst['state'] ) && 'active' === $pst['state'] && ( empty( $pst['expires'] ) || (int) $pst['expires'] > time() );
 	$draft   = '1' === get_option( 'vawc_draft', '1' );
 	$has_rbg = '' !== (string) get_option( 'vawc_rbg_api', '' );
 	$exp_url = add_query_arg( array( 'action' => 'vawc_export', 'nonce' => wp_create_nonce( 'vawc_nonce' ) ), admin_url( 'admin-ajax.php' ) );
@@ -692,23 +694,26 @@ function vawc_page_main() {
 			</div>
 		</div>
 
-		<?php $pst = vawc_pro_state(); ?>
-		<?php if ( $pro ) : ?>
-			<div class="va-pro-bar va-pro-ok">✅ PRO — <?php echo esc_html( vawc_t( 'необмежена кількість товарів', 'unlimited products' ) ); ?></div>
-		<?php else : ?>
-			<div class="va-pro-card">
-				<div class="va-pro-card__top">
-					<strong>FREE — <?php echo esc_html( vawc_t( 'безкоштовний тариф', 'free plan' ) ); ?></strong>
-					<span>📦 <?php echo esc_html( vawc_t( 'Залишилося товарів:', 'Products remaining:' ) ); ?> <strong id="va_left"><?php echo (int) vawc_remaining(); ?></strong> / <?php echo (int) vawc_limit(); ?></span>
-				</div>
-				<p><?php echo esc_html( vawc_t( 'Безкоштовно можна створити 25 товарів. Рекомендуємо оформити PRO до вичерпання безкоштовного ліміту, щоб і надалі створювати товари без обмежень.', 'Create 25 products for free. We recommend upgrading to PRO before reaching the free limit to continue creating products without restrictions.' ) ); ?></p>
-				<div class="va-pro-card__upgrade">
-					<div><strong>PRO</strong> <?php $vawc_price = vawc_pro_price(); if ( $vawc_price ) : ?>· <?php echo esc_html( $vawc_price ); ?><?php else : ?>· <?php echo esc_html( vawc_t( 'Ціна тимчасово недоступна', 'Price temporarily unavailable' ) ); ?><?php endif; ?></div>
-					<?php echo vawc_buy_button( vawc_t( 'Придбати PRO', 'Buy PRO' ) ); // phpcs:ignore ?>
-				</div>
-				<small><?php echo esc_html( vawc_t( 'Разова оплата · безстроковий доступ · безкоштовні оновлення · пріоритетна підтримка. Якщо валюта оплати відрізняється від гривні, банк покупця перерахує суму в гривні за власним курсом.', 'One-time payment · lifetime access · free updates · priority support. If the payment currency differs from UAH, the buyer’s bank converts the amount into UAH using its own exchange rate.' ) ); ?></small>
+		<?php
+		$vawc_count = vawc_count();
+		$vawc_limit = vawc_limit();
+		$vawc_left  = vawc_remaining();
+		$vawc_price = vawc_pro_price();
+		?>
+		<div class="va-pro-card">
+			<div class="va-pro-card__top">
+				<strong><?php if ( $pro ) : ?>✅ PRO — <?php echo esc_html( vawc_t( 'активний · без обмежень', 'active · unlimited' ) ); ?><?php else : ?>FREE — <?php echo esc_html( vawc_t( 'безкоштовний тариф', 'free plan' ) ); ?><?php endif; ?></strong>
+				<span>📦 <?php echo esc_html( vawc_t( 'Створено товарів:', 'Products created:' ) ); ?> <strong id="va_created" data-limit="<?php echo (int) $vawc_limit; ?>"><?php echo (int) $vawc_count; ?></strong><?php if ( ! $pro ) : ?> / <?php echo (int) $vawc_limit; ?> · <?php echo esc_html( vawc_t( 'залишилося:', 'remaining:' ) ); ?> <strong id="va_left"><?php echo (int) $vawc_left; ?></strong><?php else : ?> · <?php echo esc_html( vawc_t( 'без обмежень', 'unlimited' ) ); ?><?php endif; ?></span>
 			</div>
-		<?php endif; ?>
+			<p><?php echo esc_html( vawc_t( 'FREE: 25 успішно створених товарів. PRO: необмежена кількість товарів, разова оплата, безстроковий доступ, безкоштовні оновлення та пріоритетна підтримка.', 'FREE: 25 successfully created products. PRO: unlimited products, one-time payment, lifetime access, free updates and priority support.' ) ); ?></p>
+			<div class="va-pro-card__upgrade">
+				<div><strong>PRO</strong> <?php if ( $vawc_price ) : ?>· <?php echo esc_html( $vawc_price ); ?><?php else : ?>· <?php echo esc_html( vawc_t( 'Ціна тимчасово недоступна', 'Price temporarily unavailable' ) ); ?><?php endif; ?></div>
+				<?php if ( ! $pro ) : ?>
+					<?php echo vawc_buy_button( vawc_t( 'Придбати PRO', 'Buy PRO' ) ); // phpcs:ignore ?>
+				<?php endif; ?>
+			</div>
+			<small><?php echo esc_html( vawc_t( 'Оплата проводиться на сторінці Freemius. Ліцензійний ключ вводити не потрібно. Ціна в гривнях надходить із UA Pay Box за курсом НБУ.', 'Payment is processed on Freemius. No license key is required. The UAH price is supplied by UA Pay Box using the NBU exchange rate.' ) ); ?></small>
+		</div>
 
 		<video id="va_cam" autoplay playsinline muted></video>
 		<div id="va_gal" class="va-gal"></div>
