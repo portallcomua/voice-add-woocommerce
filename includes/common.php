@@ -214,6 +214,10 @@ function vawc_checkout_url() {
 }
 function vawc_pro_price() {
 	$service = vawc_paybox_service();
+	// Якщо в кеші ще немає ціни, одразу повторно запитуємо UA Pay Box.
+	if ( empty( $service['price'] ) ) {
+		$service = vawc_paybox_service( true );
+	}
 	return ! empty( $service['price'] ) ? sanitize_text_field( $service['price'] ) : '';
 }
 
@@ -722,7 +726,7 @@ function vawc_page_main() {
 					<div><strong>PRO</strong> <?php $vawc_price = vawc_pro_price(); if ( $vawc_price ) : ?>· <?php echo esc_html( $vawc_price ); ?><?php else : ?>· <?php echo esc_html( vawc_t( 'Ціна тимчасово недоступна', 'Price temporarily unavailable' ) ); ?><?php endif; ?></div>
 					<?php echo vawc_buy_button( vawc_t( 'Придбати PRO', 'Buy PRO' ) ); // phpcs:ignore ?>
 				</div>
-				<small><?php echo esc_html( vawc_t( 'Разова оплата · безстроковий доступ · безкоштовні оновлення · пріоритетна підтримка. Під час оплати карткою сума в гривнях визначається за курсом банку покупця.', 'One-time payment · lifetime access · free updates · priority support. For card payments, the amount in UAH is calculated using the buyer’s bank exchange rate.' ) ); ?></small>
+				<small><?php echo esc_html( vawc_t( 'Разова оплата · безстроковий доступ · безкоштовні оновлення · пріоритетна підтримка. Якщо валюта оплати відрізняється від гривні, банк покупця перерахує суму в гривні за власним курсом.', 'One-time payment · lifetime access · free updates · priority support. If the payment currency differs from UAH, the buyer’s bank converts the amount into UAH using its own exchange rate.' ) ); ?></small>
 			</div>
 		<?php endif; ?>
 
