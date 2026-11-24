@@ -134,83 +134,86 @@ function vawc_updater() {
 vawc_updater();
 
 /* ====================================================================== */
-/* 3. PRO ЧЕРЕЗ Universal Pay Box (сервер оплат). PRO прив'язано до ДОМЕНУ */
+/* 3. PRO ЧЕРЕЗ FREEMIUS + UA PAY BOX                                      */
 /* ====================================================================== */
-function vawc_hub_url() {
-	$u = trim( (string) get_option( 'vawc_hub', '' ) );
-	if ( '' === $u ) {
-		$u = VAWC_HUB;
-	}
-	return untrailingslashit( esc_url_raw( $u ) );
-}
-function vawc_domain() {
-	$h = wp_parse_url( home_url(), PHP_URL_HOST );
-	return strtolower( preg_replace( '/^www\./', '', (string) $h ) );
-}
-/** Сервер оплат — це цей самий сайт (Pay Box встановлено поруч)? Тоді викликаємо REST без HTTP. */
-function vawc_hub_is_local() {
-	$h = strtolower( preg_replace( '/^www\./', '', (string) wp_parse_url( vawc_hub_url(), PHP_URL_HOST ) ) );
-	return '' !== $h && vawc_domain() === $h && class_exists( 'UPB_Rest' );
-}
-function vawc_hub_call( $method, $route, array $params = array() ) {
-	if ( vawc_hub_is_local() ) {
-		$req = new WP_REST_Request( $method, '/upb/v1/' . $route );
-		foreach ( $params as $k => $v ) {
-			$req->set_param( $k, $v );
+function vawc_paybox_url() { return untrailingslashit( VAWC_HUB ); }
+
+/** Публічні дані тарифу та ціна надходять із центрального UA Pay Box. */
+function vawc_paybox_service( $force = false ) {
+	$locale = function_exists( 'determine_locale' ) ? determine_locale() : get_locale();
+	$key = 'vawc_paybox_service_' . md5( $locale );
+	$cached = get_transient( $key );
+	if ( ! $force && is_array( $cached ) ) return $cached;
+	$url = add_query_arg( array( 'service' => 'voice-add-woocommerce', 'locale' => $locale ), vawc_paybox_url() . '/wp-json/upb/v1/service' );
+	$response = wp_remote_get( $url, array( 'timeout' => 12, 'redirection' => 2, 'headers' => array( 'Accept' => 'application/json' ) ) );
+	if ( ! is_wp_error( $response ) && 200 === (int) wp_remote_retrieve_response_code( $response ) ) {
+		$data = json_decode( wp_remote_retrieve_body( $response ), true );
+		if ( is_array( $data ) && ! empty( $data['checkout_url'] ) ) {
+			set_transient( $key, $data, ! empty( $data['price'] ) ? 12 * HOUR_IN_SECONDS : 10 * MINUTE_IN_SECONDS );
+			return $data;
 		}
-		$res  = rest_do_request( $req );
-		$data = $res->get_data();
-		$code = $res->get_status();
-	} else {
-		$url = vawc_hub_url() . '/wp-json/upb/v1/' . $route;
-		$r   = ( 'GET' === $method )
-			? wp_remote_get( add_query_arg( $params, $url ), array( 'timeout' => 10 ) )
-			: wp_remote_post( $url, array( 'timeout' => 15, 'body' => $params ) );
-		if ( is_wp_error( $r ) ) {
-			return $r;
-		}
-		$code = (int) wp_remote_retrieve_response_code( $r );
-		$data = json_decode( wp_remote_retrieve_body( $r ), true );
 	}
-	if ( $code < 200 || $code >= 300 || ! is_array( $data ) ) {
-		return new WP_Error( 'hub', ( is_array( $data ) && isset( $data['message'] ) ) ? $data['message'] : vawc_t( 'Сервер оплати недоступний', 'Payment server unavailable' ) );
-	}
-	return $data;
+	return is_array( $cached ) ? $cached : array();
 }
-/** Стан PRO цього сайту. Кеш 6 год.; якщо сервер недоступний — діє останній відомий стан до 7 діб. */
+
+/** Hosted Checkout прив'язує покупку до email адміністратора WordPress. */
+function vawc_checkout_url() {
+	$service = vawc_paybox_service();
+	$url = ! empty( $service['checkout_url'] ) ? $service['checkout_url'] : '';
+	if ( ! $url ) return '';
+	return esc_url( add_query_arg( array(
+		'user_email' => sanitize_email( get_option( 'admin_email' ) ),
+		'readonly_user' => 'true',
+		'cancel_url' => admin_url( 'admin.php?page=vawc_main' ),
+	), $url ) );
+}
+function vawc_pro_price() {
+	$service = vawc_paybox_service();
+	return ! empty( $service['price'] ) ? sanitize_text_field( $service['price'] ) : '';
+}
+
+/** Перевірка покупки через email у центральному Pay Box; ключ вводити не потрібно. */
 function vawc_pro_state( $force = false ) {
-	$c = get_option( 'vawc_pro' );
-	$c = is_array( $c ) ? $c : array( 'state' => 'free', 'expires' => 0, 'checked' => 0 );
-	if ( $force || ( time() - (int) $c['checked'] > 6 * HOUR_IN_SECONDS && ! get_transient( 'vawc_hub_down' ) ) ) {
-		$r = vawc_hub_call( 'GET', 'status', array( 'service' => 'voice-add-woocommerce', 'domain' => vawc_domain() ) );
-		if ( ! is_wp_error( $r ) ) {
-			$c = array( 'state' => $r['state'], 'expires' => (int) $r['expires'], 'checked' => time() );
-			update_option( 'vawc_pro', $c, false );
-			delete_transient( 'vawc_hub_down' );
-		} else {
-			set_transient( 'vawc_hub_down', 1, 5 * MINUTE_IN_SECONDS );
-			if ( time() - (int) $c['checked'] > 7 * DAY_IN_SECONDS ) {
-				$c['state'] = 'free';
-			}
-		}
+	$email = sanitize_email( get_option( 'admin_email' ) );
+	$cache = get_option( 'vawc_freemius_pro', array() );
+	$cache = is_array( $cache ) ? $cache : array();
+	$checked = isset( $cache['checked'] ) ? (int) $cache['checked'] : 0;
+	$same_email = isset( $cache['email'] ) && strtolower( $cache['email'] ) === strtolower( $email );
+	$valid = $same_email && isset( $cache['state'] ) && 'active' === $cache['state'];
+	if ( ! $force && $same_email && $checked && ( time() - $checked ) < 5 * MINUTE_IN_SECONDS ) return $cache;
+	if ( ! $email || ! is_email( $email ) ) return array( 'state' => 'free', 'expires' => 0, 'checked' => time(), 'email' => $email );
+	$response = wp_remote_post( vawc_paybox_url() . '/wp-json/upb/v1/license/status', array(
+		'timeout' => 12, 'redirection' => 2, 'headers' => array( 'Accept' => 'application/json' ),
+		'body' => array( 'service' => 'voice-add-woocommerce', 'email' => $email ),
+	) );
+	if ( is_wp_error( $response ) ) {
+		return $valid && $checked && ( time() - $checked ) <= 7 * DAY_IN_SECONDS ? $cache : array( 'state' => 'free', 'expires' => 0, 'checked' => $checked, 'email' => $email );
 	}
-	return $c;
+	$code = (int) wp_remote_retrieve_response_code( $response );
+	$data = json_decode( wp_remote_retrieve_body( $response ), true );
+	if ( 200 !== $code || ! is_array( $data ) || ! array_key_exists( 'valid', $data ) ) {
+		return $valid && $checked && ( time() - $checked ) <= 7 * DAY_IN_SECONDS ? $cache : array( 'state' => 'free', 'expires' => 0, 'checked' => $checked, 'email' => $email );
+	}
+	$state = array(
+		'state' => ! empty( $data['valid'] ) ? 'active' : 'free',
+		'expires' => isset( $data['expires'] ) ? absint( $data['expires'] ) : 0,
+		'checked' => time(), 'email' => $email,
+		'status' => isset( $data['status'] ) ? sanitize_key( $data['status'] ) : 'unknown',
+	);
+	update_option( 'vawc_freemius_pro', $state, false );
+	return $state;
 }
 function vawc_is_pro() {
 	$c = vawc_pro_state();
-	return in_array( $c['state'], array( 'active', 'expiring', 'unlimited' ), true ) && ( ! $c['expires'] || $c['expires'] > time() );
+	return isset( $c['state'] ) && 'active' === $c['state'] && ( empty( $c['expires'] ) || (int) $c['expires'] > time() );
 }
 function vawc_buy_button( $label = '' ) {
-	return '<button type="button" class="button button-primary va-buy" data-va-buy="1">💰 ' . esc_html( $label ? $label : vawc_t( 'Купити PRO', 'Buy PRO' ) ) . '</button>';
+	$url = vawc_checkout_url();
+	if ( ! $url ) return '<span class="button va-buy-disabled">' . esc_html( vawc_t( 'Оплата тимчасово недоступна', 'Checkout temporarily unavailable' ) ) . '</span>';
+	return '<a class="button button-primary va-buy" href="' . esc_url( $url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $label ? $label : vawc_t( 'Придбати PRO через Freemius', 'Buy PRO via Freemius' ) ) . '</a>';
 }
-// Якщо Pay Box стоїть на цьому ж сайті — проект створюється автоматично (Конверт і вартість вказує адмін).
-add_action( 'admin_init', function () {
-	if ( vawc_hub_is_local() && function_exists( 'upb_register_service' ) && ! upb_service_id( 'voice-add-woocommerce' ) ) {
-		upb_register_service( 'voice-add-woocommerce', 'Voice ADD for WooCommerce PRO', array( 'id_mode' => 'domain' ) );
-	}
-} );
 
-/* Безкоштовний ліміт — на користувача */
+/* Безкоштовний ліміт — 25 успішно створених товарів на користувача. */
 function vawc_limit() { return (int) apply_filters( 'vawc_free_limit', VAWC_FREE_LIMIT ); }
 function vawc_count() { return (int) get_user_meta( get_current_user_id(), 'vawc_ops', true ); }
 function vawc_inc( $n = 1 ) { update_user_meta( get_current_user_id(), 'vawc_ops', vawc_count() + (int) $n ); }
@@ -219,6 +222,7 @@ function vawc_can_create( $n = 1 ) { return vawc_is_pro() || vawc_count() + (int
 
 /* ====================================================================== */
 /* 4. РОЛЬ, ПРАВА, АКТИВАЦІЯ                                               */
+                                               */
 /* ====================================================================== */
 function vawc_setup() {
 	if ( get_role( 'vawc_manager' ) ) {
@@ -472,7 +476,7 @@ function vawc_page_settings() {
 	if ( isset( $_POST['vawc_save'] ) && check_admin_referer( 'vawc_cfg' ) ) {
 		update_option( 'vawc_rbg_api', sanitize_text_field( wp_unslash( isset( $_POST['rbg_api'] ) ? $_POST['rbg_api'] : '' ) ) );
 		update_option( 'vawc_draft', isset( $_POST['draft'] ) ? '1' : '0' );
-		update_option( 'vawc_hub', esc_url_raw( trim( wp_unslash( isset( $_POST['hub'] ) ? $_POST['hub'] : '' ) ) ) );
+		delete_transient( 'vawc_paybox_service_' . md5( function_exists( 'determine_locale' ) ? determine_locale() : get_locale() ) );
 		vawc_pro_state( true );
 		$lang = isset( $_POST['lang'] ) ? sanitize_key( $_POST['lang'] ) : 'auto';
 		update_option( 'vawc_lang', in_array( $lang, array( 'auto', 'uk', 'en' ), true ) ? $lang : 'auto' );
@@ -505,8 +509,7 @@ function vawc_page_settings() {
 	$draft = get_option( 'vawc_draft', '1' );
 	$roles = (array) get_option( 'vawc_allowed_roles', array( 'administrator', 'vawc_manager' ) );
 	$lang  = get_option( 'vawc_lang', 'auto' );
-	$hub   = get_option( 'vawc_hub', '' );
-	$svc   = vawc_hub_call( 'GET', 'service', array( 'service' => 'voice-add-woocommerce' ) );
+	$svc   = vawc_paybox_service();
 	$pst   = vawc_pro_state();
 	?>
 	<div class="wrap">
@@ -523,11 +526,6 @@ function vawc_page_settings() {
 					<th><label>Remove.bg API Key</label></th>
 					<td><input type="text" name="rbg_api" value="<?php echo esc_attr( $rbg ); ?>" class="regular-text code" autocomplete="off">
 					<p class="description"><?php echo esc_html( vawc_t( 'Для прибирання фону на фото. Ключ: remove.bg/api. Без ключа вибір фону вимкнено.', 'For background removal on photos. Get a key at remove.bg/api. Without a key the background picker is disabled.' ) ); ?></p></td>
-				</tr>
-				<tr>
-					<th><label><?php echo esc_html( vawc_t( 'Сервер оплат (Pay Box)', 'Payment server (Pay Box)' ) ); ?></label></th>
-					<td><input type="url" name="hub" value="<?php echo esc_attr( $hub ); ?>" class="regular-text code" placeholder="<?php echo esc_attr( VAWC_HUB ); ?>">
-					<p class="description"><?php echo esc_html( vawc_t( 'Сайт із плагіном Universal Pay Box PRO, де обліковуються активації PRO. Порожньо = стандартний сервер.', 'Site running Universal Pay Box PRO that records PRO activations. Empty = default server.' ) ); ?></p></td>
 				</tr>
 				<tr>
 					<th><?php echo esc_html( vawc_t( 'Статус нового запису', 'New item status' ) ); ?></th>
@@ -562,31 +560,17 @@ function vawc_page_settings() {
 		</form>
 
 		<hr>
-		<h2>💰 PRO</h2>
-		<table class="widefat striped" style="max-width:680px"><tbody>
-			<tr><td><?php echo esc_html( vawc_t( 'Домен вашого сайту (вказується в платежі)', 'Your site domain (put it in the payment comment)' ) ); ?></td><td><strong><?php echo esc_html( vawc_domain() ); ?></strong></td></tr>
-			<tr><td><?php echo esc_html( vawc_t( 'Сервер оплат', 'Payment server' ) ); ?></td><td><?php echo esc_html( vawc_hub_url() ); ?> <?php echo vawc_hub_is_local() ? '(' . esc_html( vawc_t( 'цей сайт', 'this site' ) ) . ')' : ''; ?></td></tr>
-			<tr><td><?php echo esc_html( vawc_t( 'Проект на сервері', 'Project on server' ) ); ?></td><td><?php
-				if ( is_wp_error( $svc ) ) {
-					echo '🔴 ' . esc_html( $svc->get_error_message() );
-				} else {
-					echo '🟢 ' . esc_html( $svc['name'] ) . ' · ' . esc_html( $svc['price'] ) . ( empty( $svc['url'] ) ? ' · ⚠️ ' . esc_html( vawc_t( 'немає посилання на Конверт', 'no envelope link' ) ) : '' );
-				}
-			?></td></tr>
-			<tr><td><?php echo esc_html( vawc_t( 'Статус PRO', 'PRO status' ) ); ?></td><td><?php
-				$labels = array( 'free' => 'FREE', 'active' => '✅ PRO', 'expiring' => '✅ PRO (' . vawc_t( 'скоро закінчиться', 'expiring soon' ) . ')', 'unlimited' => '✅ PRO (∞)', 'blocked' => '⛔ ' . vawc_t( 'заблоковано', 'blocked' ) );
-				echo esc_html( isset( $labels[ $pst['state'] ] ) ? $labels[ $pst['state'] ] : $pst['state'] );
-				if ( ! empty( $pst['expires'] ) ) {
-					echo ' · ' . esc_html( vawc_t( 'до ', 'until ' ) . wp_date( 'd.m.Y', (int) $pst['expires'] ) );
-				}
-			?> · FREE <?php echo (int) vawc_count(); ?>/<?php echo (int) vawc_limit(); ?></td></tr>
+		<h2>💰 PRO / Freemius</h2>
+		<table class="widefat striped" style="max-width:760px"><tbody>
+			<tr><td><?php echo esc_html( vawc_t( 'Ціна PRO з UA Pay Box', 'PRO price from UA Pay Box' ) ); ?></td><td><strong><?php echo esc_html( vawc_pro_price() ? vawc_pro_price() : vawc_t( 'Ціна ще не налаштована', 'Price is not configured yet' ) ); ?></strong></td></tr>
+			<tr><td><?php echo esc_html( vawc_t( 'Посилання Freemius', 'Freemius checkout' ) ); ?></td><td><?php echo vawc_checkout_url() ? '🟢 ' . esc_html( vawc_t( 'Налаштовано', 'Configured' ) ) : '🔴 ' . esc_html( vawc_t( 'Не налаштовано в UA Pay Box', 'Not configured in UA Pay Box' ) ); ?></td></tr>
+			<tr><td><?php echo esc_html( vawc_t( 'Email для підтвердження покупки', 'Purchase verification email' ) ); ?></td><td><strong><?php echo esc_html( get_option( 'admin_email' ) ); ?></strong></td></tr>
+			<tr><td><?php echo esc_html( vawc_t( 'Статус PRO', 'PRO status' ) ); ?></td><td><?php echo vawc_is_pro() ? '✅ PRO — ' . esc_html( vawc_t( 'без обмежень', 'unlimited' ) ) : 'FREE'; ?> · <?php echo (int) vawc_count(); ?>/<?php echo (int) vawc_limit(); ?></td></tr>
 		</tbody></table>
+		<p><?php echo esc_html( vawc_t( 'Free: 25 успішно створених товарів. PRO: необмежена кількість товарів, разова оплата, безстроковий доступ, безкоштовні оновлення та пріоритетна підтримка. Оплата проводиться на сторінці Freemius; ліцензійний ключ вводити не потрібно. Ціна в гривнях надходить із Pay Box за курсом НБУ.', 'Free: 25 successfully created products. PRO: unlimited products, one-time payment, lifetime access, free updates and priority support. Payment is processed on Freemius; no license key entry is required. UAH pricing is supplied by Pay Box using the NBU rate.' ) ); ?></p>
 		<form method="post" style="margin-top:10px"><?php wp_nonce_field( 'vawc_cfg' ); ?>
-			<button type="submit" name="vawc_pro_refresh" value="1" class="button">🔄 <?php echo esc_html( vawc_t( 'Оновити статус PRO', 'Refresh PRO status' ) ); ?></button>
-			<?php if ( vawc_hub_is_local() ) : ?>
-				<a class="button" href="<?php echo esc_url( admin_url( 'admin.php?page=upb-services' ) ); ?>">UA Pay Box → <?php echo esc_html( vawc_t( 'Послуги', 'Services' ) ); ?></a>
-				<a class="button" href="<?php echo esc_url( admin_url( 'admin.php?page=upb-premiums' ) ); ?>"><?php echo esc_html( vawc_t( 'Контроль Преміумів', 'Premium control' ) ); ?></a>
-			<?php endif; ?>
+			<button type="submit" name="vawc_pro_refresh" value="1" class="button">🔄 <?php echo esc_html( vawc_t( 'Перевірити оплату / оновити статус PRO', 'Check payment / refresh PRO status' ) ); ?></button>
+			<a class="button" href="<?php echo esc_url( 'https://uaserver.pp.ua/wp-admin/admin.php?page=upb-services' ); ?>" target="_blank" rel="noopener"><?php echo esc_html( vawc_t( 'Налаштування UA Pay Box', 'UA Pay Box settings' ) ); ?></a>
 		</form>
 	</div>
 	<?php
@@ -639,14 +623,6 @@ add_action( 'admin_enqueue_scripts', function ( $hook ) {
 		'netErr'     => vawc_t( 'Помилка зʼєднання', 'Connection error' ),
 		'remove'     => vawc_t( 'Натисніть, щоб видалити фото', 'Tap to remove photo' ),
 		'printTitle' => vawc_t( 'Інструкція', 'Instruction' ),
-		'copyDomain' => '📋 ' . vawc_t( 'Скопіювати домен', 'Copy domain' ),
-		'copied'     => vawc_t( 'Скопійовано! 👍', 'Copied! 👍' ),
-		'copyManual' => vawc_t( 'Скопіюйте виділене вручну', 'Copy the selected text manually' ),
-		'payGo'      => vawc_t( 'Перейти до оплати →', 'Go to payment →' ),
-		'activating' => vawc_t( 'Активація…', 'Activating…' ),
-		'alreadyPro' => vawc_t( 'PRO вже активний.', 'PRO is already active.' ),
-		'blockedMsg' => vawc_t( 'PRO заблоковано: оплата не надійшла. Сплатіть за посиланням, вказавши домен у коментарі, — після підтвердження адмін відновить доступ.', 'PRO is blocked: payment was not received. Pay via the link with the domain in the comment — the admin will restore access after confirming.' ),
-		'noPayUrl'   => vawc_t( 'Адміністратор ще не вказав посилання на оплату.', 'The administrator has not set the payment link yet.' ),
 	);
 	wp_localize_script(
 		'vawc-app',
@@ -654,7 +630,7 @@ add_action( 'admin_enqueue_scripts', function ( $hook ) {
 		array(
 			'ajax'    => admin_url( 'admin-ajax.php' ),
 			'nonce'   => wp_create_nonce( 'vawc_nonce' ),
-			'actions' => array( 'save' => 'vawc_save', 'bg' => 'vawc_remove_bg', 'import' => 'vawc_import', 'payInfo' => 'vawc_pay_info', 'payGo' => 'vawc_pay_activate' ),
+			'actions' => array( 'save' => 'vawc_save', 'bg' => 'vawc_remove_bg', 'import' => 'vawc_import',  ),
 			'attrNames' => array_map( function ( $a ) { return $a['label']; }, vawc_attr_defs() ),
 			'lang'    => vawc_en() ? 'en-US' : 'uk-UA',
 			'hasRbg'  => '' !== (string) get_option( 'vawc_rbg_api', '' ),
@@ -687,15 +663,19 @@ function vawc_page_main() {
 
 		<?php $pst = vawc_pro_state(); ?>
 		<?php if ( $pro ) : ?>
-			<div class="va-pro-bar va-pro-ok">✅ PRO — <?php echo esc_html( vawc_t( 'без обмежень', 'unlimited' ) ); ?><?php echo ! empty( $pst['expires'] ) ? ' · ' . esc_html( vawc_t( 'до ', 'until ' ) . wp_date( 'd.m.Y', (int) $pst['expires'] ) ) : ''; ?></div>
+			<div class="va-pro-bar va-pro-ok">✅ PRO — <?php echo esc_html( vawc_t( 'необмежена кількість товарів', 'unlimited products' ) ); ?></div>
 		<?php else : ?>
-			<div class="va-pro-bar<?php echo 'blocked' === $pst['state'] ? ' va-pro-blocked' : ''; ?>">
-				<?php if ( 'blocked' === $pst['state'] ) : ?>
-					⛔ <?php echo esc_html( vawc_t( 'PRO заблоковано адміністратором — оплата не надійшла.', 'PRO was blocked by the administrator — payment not received.' ) ); ?>
-				<?php endif; ?>
-				📊 <?php echo esc_html( vawc_t( 'Залишилось безкоштовно:', 'Free left:' ) ); ?>
-				<strong id="va_left"><?php echo (int) vawc_remaining(); ?></strong>/<?php echo (int) vawc_limit(); ?>
-				<?php echo vawc_buy_button(); // phpcs:ignore ?>
+			<div class="va-pro-card">
+				<div class="va-pro-card__top">
+					<strong>FREE — <?php echo esc_html( vawc_t( 'безкоштовний тариф', 'free plan' ) ); ?></strong>
+					<span>📦 <?php echo esc_html( vawc_t( 'Залишилося товарів:', 'Products remaining:' ) ); ?> <strong id="va_left"><?php echo (int) vawc_remaining(); ?></strong> / <?php echo (int) vawc_limit(); ?></span>
+				</div>
+				<p><?php echo esc_html( vawc_t( 'Безкоштовно можна створити 25 товарів. Після використання ліміту оформіть PRO, щоб створювати товари без обмежень.', 'Create 25 products for free. After using the limit, upgrade to PRO for unlimited product creation.' ) ); ?></p>
+				<div class="va-pro-card__upgrade">
+					<div><strong>PRO</strong> · <?php echo esc_html( vawc_pro_price() ? vawc_pro_price() : vawc_t( 'ціна завантажується з UA Pay Box', 'price loading from UA Pay Box' ) ); ?></div>
+					<?php echo vawc_buy_button( vawc_t( 'Придбати PRO через Freemius', 'Buy PRO via Freemius' ) ); // phpcs:ignore ?>
+				</div>
+				<small><?php echo esc_html( vawc_t( 'Разова оплата · безстроковий доступ · безкоштовні оновлення · пріоритетна підтримка. Ліцензійний ключ вводити не потрібно. Покупка прив’язується до email адміністратора сайту.', 'One-time payment · lifetime access · free updates · priority support. No license key required. Purchase is linked to the website administrator email.' ) ); ?></small>
 			</div>
 		<?php endif; ?>
 
@@ -743,25 +723,8 @@ function vawc_page_main() {
 			<div id="va_csv_msg" class="va-msg"></div>
 		</div>
 
-		<!-- ОПЛАТА PRO -->
-		<div class="va-modal" id="va_pay" hidden>
-			<div class="va-modal__bg" data-va-close></div>
-			<div class="va-modal__box" role="dialog" aria-modal="true">
-				<button type="button" class="va-modal__x" data-va-close aria-label="×">&times;</button>
-				<h3>💰 <span data-va-pname></span></h3>
-				<div class="va-modal__price" data-va-pprice></div>
-				<div data-va-pmsg class="va-modal__msg" hidden></div>
-				<div data-va-pbody>
-					<p class="va-muted"><?php echo esc_html( vawc_t( 'Домен вашого сайту:', 'Your site domain:' ) ); ?></p>
-					<div class="va-idrow"><strong data-va-domain></strong><button type="button" id="va_pay_copy" class="va-copy">📋 <?php echo esc_html( vawc_t( 'Скопіювати домен', 'Copy domain' ) ); ?></button></div>
-					<p class="va-note"><strong><?php echo esc_html( vawc_t( 'Обов\'язково', 'Required:' ) ); ?></strong> <?php echo esc_html( vawc_t( 'вставте скопійований домен у поле «Коментар» або «Призначення платежу» на сторінці банку. Це необхідно для верифікації вашого платежу адміном. Платежі без вказаного домену будуть заблоковані.', 'paste the copied domain into the “Comment” or “Payment purpose” field on the bank page. It is needed to verify your payment. Payments without the domain will be blocked.' ) ); ?></p>
-					<p class="va-muted"><?php echo esc_html( vawc_t( 'PRO активується одразу. Якщо платіж не надійде — адмін вимкне доступ.', 'PRO is activated immediately. If the payment does not arrive, the admin will disable it.' ) ); ?></p>
-					<button type="button" id="va_pay_go" class="va-btn va-blue" disabled><?php echo esc_html( vawc_t( 'Перейти до оплати →', 'Go to payment →' ) ); ?></button>
-				</div>
-			</div>
-		</div>
 
-		<!-- ІНСТРУКЦІЇ -->
+
 		<div id="va_instr" class="va-instr-wrap">
 			<h2>📖 <?php echo esc_html( vawc_t( 'Інструкції', 'Instructions' ) ); ?></h2>
 			<?php vawc_render_instructions(); ?>
@@ -859,26 +822,6 @@ add_action( 'wp_ajax_vawc_save', function () {
 	}
 	$res['left'] = vawc_is_pro() ? -1 : vawc_remaining();
 	wp_send_json_success( $res );
-} );
-
-add_action( 'wp_ajax_vawc_pay_info', function () {
-	vawc_ajax_guard();
-	$svc = vawc_hub_call( 'GET', 'service', array( 'service' => 'voice-add-woocommerce' ) );
-	if ( is_wp_error( $svc ) ) {
-		wp_send_json_error( $svc->get_error_message() );
-	}
-	$st = vawc_pro_state( true );
-	wp_send_json_success( array( 'name' => $svc['name'], 'price' => $svc['price'], 'url' => $svc['url'], 'domain' => vawc_domain(), 'state' => $st['state'] ) );
-} );
-
-add_action( 'wp_ajax_vawc_pay_activate', function () {
-	vawc_ajax_guard();
-	$r = vawc_hub_call( 'POST', 'activate', array( 'service' => 'voice-add-woocommerce', 'domain' => vawc_domain(), 'email' => get_option( 'admin_email' ), 'site_url' => home_url() ) );
-	if ( is_wp_error( $r ) ) {
-		wp_send_json_error( $r->get_error_message() );
-	}
-	vawc_pro_state( true );
-	wp_send_json_success( array( 'url' => $r['url'] ) );
 } );
 
 add_action( 'wp_ajax_vawc_remove_bg', function () {

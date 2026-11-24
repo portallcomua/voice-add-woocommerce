@@ -9,7 +9,7 @@ foreach ( (array) get_option( 'active_plugins', array() ) as $vawc_active ) {
 	}
 }
 remove_role( 'vawc_manager' );
-foreach ( array( 'vawc_hub', 'vawc_pro', 'vawc_draft', 'vawc_rbg_api', 'vawc_lang', 'vawc_allowed_roles', 'vawc_ver' ) as $vawc_option_name ) {
+foreach ( array( 'vawc_hub', 'vawc_pro', 'vawc_freemius_pro', 'vawc_paybox_email_status', 'vawc_draft', 'vawc_rbg_api', 'vawc_lang', 'vawc_allowed_roles', 'vawc_ver' ) as $vawc_option_name ) {
 	delete_option( $vawc_option_name );
 }
 delete_metadata( 'user', 0, 'vawc_ops', '', true );
