@@ -61,7 +61,9 @@ class VAWC_Updater {
 		if ( false !== $cached ) {
 			return $cached ? $cached : null;
 		}
-		$resp = wp_remote_get(
+
+		$api_error = '';
+		$api = wp_remote_get(
 			'https://api.github.com/repos/' . $this->repo . '/releases/latest',
 			array(
 				'timeout'     => 15,
@@ -72,43 +74,84 @@ class VAWC_Updater {
 				),
 			)
 		);
-		if ( is_wp_error( $resp ) ) {
-			$this->last_error = $resp->get_error_message();
-			return null;
-		}
-		$code = (int) wp_remote_retrieve_response_code( $resp );
-		$body = wp_remote_retrieve_body( $resp );
-		if ( 200 !== $code ) {
-			$api_error = json_decode( $body );
-			$this->last_error = ( $api_error && ! empty( $api_error->message ) )
-				? 'GitHub HTTP ' . $code . ': ' . sanitize_text_field( $api_error->message )
-				: 'GitHub HTTP ' . $code;
-			return null;
-		}
-		$d = json_decode( $body );
-		if ( ! $d || empty( $d->tag_name ) ) {
-			$this->last_error = 'GitHub повернув некоректні дані релізу.';
-			return null;
-		}
-		$zip = ! empty( $d->zipball_url ) ? $d->zipball_url : '';
-		if ( ! empty( $d->assets ) ) {
-			foreach ( $d->assets as $a ) {
-				if ( isset( $a->name, $a->browser_download_url ) && preg_match( '/\.zip$/i', $a->name ) ) {
-					$zip = $a->browser_download_url;
-					if ( $a->name === $this->slug . '.zip' ) {
-						break;
+
+		if ( is_wp_error( $api ) ) {
+			$api_error = $api->get_error_message();
+		} else {
+			$api_code = (int) wp_remote_retrieve_response_code( $api );
+			$api_data = 200 === $api_code ? json_decode( wp_remote_retrieve_body( $api ) ) : null;
+			if ( $api_data && ! empty( $api_data->tag_name ) ) {
+				$zip = ! empty( $api_data->zipball_url ) ? $api_data->zipball_url : '';
+				if ( ! empty( $api_data->assets ) ) {
+					foreach ( $api_data->assets as $asset ) {
+						if ( isset( $asset->name, $asset->browser_download_url ) && preg_match( '/\\.zip$/i', $asset->name ) ) {
+							$zip = $asset->browser_download_url;
+							if ( $asset->name === $this->slug . '.zip' ) {
+								break;
+							}
+						}
 					}
 				}
+				if ( $zip ) {
+					$out = (object) array(
+						'version' => ltrim( $api_data->tag_name, 'vV' ),
+						'zip'     => esc_url_raw( $zip ),
+						'url'     => ! empty( $api_data->html_url ) ? esc_url_raw( $api_data->html_url ) : '',
+					);
+					set_transient( $this->key(), $out, 10 * MINUTE_IN_SECONDS );
+					return $out;
+				}
+				$api_error = 'GitHub API не повернув ZIP-архів релізу.';
+			} else {
+				$api_json = 200 === $api_code ? json_decode( wp_remote_retrieve_body( $api ) ) : null;
+				$api_error = ( $api_json && ! empty( $api_json->message ) )
+					? 'GitHub API HTTP ' . $api_code . ': ' . sanitize_text_field( $api_json->message )
+					: 'GitHub API HTTP ' . $api_code;
 			}
 		}
-		if ( ! $zip ) {
-			$this->last_error = 'У релізі GitHub немає ZIP-архіву для завантаження.';
+
+		/*
+		 * Резервний спосіб не використовує GitHub REST API.
+		 * Він потрібен, коли спільний IP хостингу вичерпав ліміт запитів api.github.com.
+		 */
+		$page = wp_remote_get(
+			'https://github.com/' . $this->repo . '/releases/latest',
+			array(
+				'timeout'     => 20,
+				'redirection' => 5,
+				'headers'     => array(
+					'Accept'     => 'text/html',
+					'User-Agent' => 'Mozilla/5.0 (compatible; Voice-ADD-WordPress-Updater/1.0)',
+				),
+			)
+		);
+		if ( is_wp_error( $page ) ) {
+			$this->last_error = trim( $api_error . '; GitHub releases page: ' . $page->get_error_message(), '; ' );
 			return null;
 		}
+		$page_code = (int) wp_remote_retrieve_response_code( $page );
+		$page_body = wp_remote_retrieve_body( $page );
+		if ( 200 !== $page_code || ! is_string( $page_body ) || '' === $page_body ) {
+			$this->last_error = trim( $api_error . '; GitHub releases page HTTP ' . $page_code, '; ' );
+			return null;
+		}
+
+		$repo_path = preg_quote( $this->repo, '~' );
+		if ( ! preg_match( '~/' . $repo_path . '/releases/tag/([^"\\'?#/<>]+)~i', $page_body, $match ) ) {
+			$this->last_error = trim( $api_error . '; Не вдалося визначити тег останнього релізу на сторінці GitHub.', '; ' );
+			return null;
+		}
+		$tag = rawurldecode( html_entity_decode( $match[1], ENT_QUOTES, 'UTF-8' ) );
+		$version = ltrim( $tag, 'vV' );
+		if ( ! preg_match( '/^\\d+\\.\\d+\\.\\d+$/', $version ) ) {
+			$this->last_error = 'GitHub повернув некоректний тег релізу: ' . sanitize_text_field( $tag );
+			return null;
+		}
+
 		$out = (object) array(
-			'version' => ltrim( $d->tag_name, 'vV' ),
-			'zip'     => esc_url_raw( $zip ),
-			'url'     => ! empty( $d->html_url ) ? esc_url_raw( $d->html_url ) : '',
+			'version' => $version,
+			'zip'     => esc_url_raw( 'https://github.com/' . $this->repo . '/archive/refs/tags/' . rawurlencode( $tag ) . '.zip' ),
+			'url'     => esc_url_raw( 'https://github.com/' . $this->repo . '/releases/tag/' . rawurlencode( $tag ) ),
 		);
 		set_transient( $this->key(), $out, 10 * MINUTE_IN_SECONDS );
 		return $out;
@@ -259,8 +302,10 @@ function vawc_pro_state( $force = false ) {
 			: array( 'state' => 'free', 'expires' => 0, 'checked' => $checked, 'email' => $email, 'verified_live' => false );
 	}
 
-	$is_live = isset( $data['environment'] ) && 0 === (int) $data['environment'];
-	$active = ! empty( $data['valid'] ) && $is_live;
+	$environment = isset( $data['environment'] ) ? strtolower( trim( (string) $data['environment'] ) ) : '';
+	$is_live = ( 0 === $data['environment'] || '0' === $environment || in_array( $environment, array( 'production', 'live' ), true ) );
+	$valid = in_array( $data['valid'], array( true, 1, '1', 'true', 'yes' ), true );
+	$active = $valid && $is_live;
 	$state = array(
 		'state' => $active ? 'active' : 'free',
 		'expires' => isset( $data['expires'] ) ? absint( $data['expires'] ) : 0,
