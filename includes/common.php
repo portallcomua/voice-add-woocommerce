@@ -33,21 +33,21 @@ function vawc_norm( $s ) {
 /* ====================================================================== */
 class VAWC_Updater {
 	private $basename, $slug, $repo, $version;
-	private $last_error = '';
 
 	public function __construct( $file, $repo, $version ) {
 		$this->basename = plugin_basename( $file );
-		$plugin_dir = dirname( $this->basename );
-		$this->slug = ( '.' === $plugin_dir || '/' === $plugin_dir ) ? basename( $this->repo ) : $plugin_dir;
-		$this->repo = $repo;
-		$this->version = $version;
+		$this->slug     = dirname( $this->basename );
+		$this->repo     = $repo;
+		$this->version  = $version;
 		add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'check' ) );
-		add_filter( 'site_transient_update_plugins', array( $this, 'check' ) );
 		add_filter( 'plugins_api', array( $this, 'info' ), 10, 3 );
 		add_filter( 'upgrader_source_selection', array( $this, 'fix_dir' ), 10, 4 );
 	}
 
 	private function key() { return 'vawc_gh_' . md5( $this->repo ); }
+
+	private $last_error = '';
+
 	public function last_error() { return $this->last_error; }
 
 	public function flush() {
@@ -59,81 +59,73 @@ class VAWC_Updater {
 		$this->last_error = '';
 		$cached = get_transient( $this->key() );
 		if ( false !== $cached ) {
-			if ( is_object( $cached ) && isset( $cached->_vawc_error ) ) {
-				$this->last_error = $cached->_vawc_error;
-				return null;
-			}
-			return ( is_object( $cached ) && ! empty( $cached->version ) && ! empty( $cached->zip ) ) ? $cached : null;
+			return $cached ? $cached : null;
 		}
-
 		$resp = wp_remote_get(
 			'https://api.github.com/repos/' . $this->repo . '/releases/latest',
 			array(
-				'timeout' => 12,
+				'timeout'     => 15,
 				'redirection' => 3,
-				'headers' => array(
-					'Accept' => 'application/vnd.github+json',
+				'headers'     => array(
+					'Accept'     => 'application/vnd.github+json',
 					'User-Agent' => 'Voice-ADD-WordPress-Updater',
 				),
 			)
 		);
-
-		$error = '';
 		if ( is_wp_error( $resp ) ) {
-			$error = $resp->get_error_message();
-		} else {
-			$code = (int) wp_remote_retrieve_response_code( $resp );
-			$body = wp_remote_retrieve_body( $resp );
-			if ( 200 !== $code ) {
-				$j = json_decode( $body );
-				$error = ( $j && ! empty( $j->message ) )
-					? 'GitHub HTTP ' . $code . ': ' . sanitize_text_field( $j->message )
-					: 'GitHub HTTP ' . $code;
-			} else {
-				$d = json_decode( $body );
-				if ( ! $d || empty( $d->tag_name ) ) {
-					$error = 'GitHub повернув некоректні дані релізу.';
-				} else {
-					$tag = (string) $d->tag_name;
-					// Direct GitHub archive URL: no extra API call for zipball_url.
-					$zip = 'https://github.com/' . $this->repo . '/archive/refs/tags/' . rawurlencode( $tag ) . '.zip';
-					if ( ! empty( $d->assets ) ) {
-						foreach ( $d->assets as $asset ) {
-							if ( isset( $asset->name, $asset->browser_download_url ) && preg_match( '/\.zip$/i', $asset->name ) ) {
-								$zip = $asset->browser_download_url;
-								if ( $asset->name === $this->slug . '.zip' ) break;
-							}
-						}
+			$this->last_error = $resp->get_error_message();
+			return null;
+		}
+		$code = (int) wp_remote_retrieve_response_code( $resp );
+		$body = wp_remote_retrieve_body( $resp );
+		if ( 200 !== $code ) {
+			$api_error = json_decode( $body );
+			$this->last_error = ( $api_error && ! empty( $api_error->message ) )
+				? 'GitHub HTTP ' . $code . ': ' . sanitize_text_field( $api_error->message )
+				: 'GitHub HTTP ' . $code;
+			return null;
+		}
+		$d = json_decode( $body );
+		if ( ! $d || empty( $d->tag_name ) ) {
+			$this->last_error = 'GitHub повернув некоректні дані релізу.';
+			return null;
+		}
+		$zip = ! empty( $d->zipball_url ) ? $d->zipball_url : '';
+		if ( ! empty( $d->assets ) ) {
+			foreach ( $d->assets as $a ) {
+				if ( isset( $a->name, $a->browser_download_url ) && preg_match( '/\.zip$/i', $a->name ) ) {
+					$zip = $a->browser_download_url;
+					if ( $a->name === $this->slug . '.zip' ) {
+						break;
 					}
-					$out = (object) array(
-						'version' => ltrim( $tag, 'vV' ),
-						'zip' => esc_url_raw( $zip ),
-						'url' => ! empty( $d->html_url ) ? esc_url_raw( $d->html_url ) : '',
-					);
-					set_transient( $this->key(), $out, 10 * MINUTE_IN_SECONDS );
-					return $out;
 				}
 			}
 		}
-
-		$this->last_error = $error ? $error : 'Не вдалося перевірити реліз GitHub.';
-		$ttl = ( false !== strpos( $this->last_error, 'HTTP 403' ) ) ? HOUR_IN_SECONDS : 10 * MINUTE_IN_SECONDS;
-		set_transient( $this->key(), (object) array( '_vawc_error' => $this->last_error ), $ttl );
-		return null;
+		if ( ! $zip ) {
+			$this->last_error = 'У релізі GitHub немає ZIP-архіву для завантаження.';
+			return null;
+		}
+		$out = (object) array(
+			'version' => ltrim( $d->tag_name, 'vV' ),
+			'zip'     => esc_url_raw( $zip ),
+			'url'     => ! empty( $d->html_url ) ? esc_url_raw( $d->html_url ) : '',
+		);
+		set_transient( $this->key(), $out, 10 * MINUTE_IN_SECONDS );
+		return $out;
 	}
 
 	public function check( $t ) {
-		if ( ! is_object( $t ) ) return $t;
-		$t->response = isset( $t->response ) ? (array) $t->response : array();
-		$t->no_update = isset( $t->no_update ) ? (array) $t->no_update : array();
+		if ( ! is_object( $t ) ) {
+			return $t;
+		}
 		$r = $this->remote();
-		if ( $r && version_compare( $this->version, $r->version, '<' ) ) {
+		if ( $r && ! empty( $r->zip ) && version_compare( $this->version, $r->version, '<' ) ) {
 			$t->response[ $this->basename ] = (object) array(
-				'slug' => $this->slug,
-				'plugin' => $this->basename,
+				'slug'        => $this->slug,
+				'plugin'      => $this->basename,
 				'new_version' => $r->version,
-				'package' => $r->zip,
-				'url' => $r->url,
+				'package'     => $r->zip,
+				'url'         => $r->url,
 			);
 			unset( $t->no_update[ $this->basename ] );
 		}
@@ -141,28 +133,36 @@ class VAWC_Updater {
 	}
 
 	public function info( $res, $action, $args ) {
-		if ( 'plugin_information' !== $action || empty( $args->slug ) || $args->slug !== $this->slug ) return $res;
+		if ( 'plugin_information' !== $action || empty( $args->slug ) || $args->slug !== $this->slug ) {
+			return $res;
+		}
 		$r = $this->remote();
-		if ( ! $r ) return $res;
+		if ( ! $r ) {
+			return $res;
+		}
 		return (object) array(
-			'name' => 'Voice ADD for WooCommerce PRO',
-			'slug' => $this->slug,
-			'version' => $r->version,
+			'name'          => 'Voice ADD for WooCommerce PRO',
+			'slug'          => $this->slug,
+			'version'       => $r->version,
 			'download_link' => $r->zip,
-			'requires_php' => '7.4',
-			'sections' => array( 'description' => 'Голосове додавання товарів у WooCommerce з фото, прибиранням фону, атрибутами та варіаціями.' ),
+			'requires_php'  => '7.4',
+			'sections'      => array(
+				'description' => 'Голосове додавання товарів у WooCommerce з фото, прибиранням фону, атрибутами та варіаціями.',
+			),
 		);
 	}
 
 	public function fix_dir( $source, $remote_source, $upgrader, $hook_extra ) {
-		if ( empty( $hook_extra['plugin'] ) || $hook_extra['plugin'] !== $this->basename ) return $source;
+		if ( empty( $hook_extra['plugin'] ) || $hook_extra['plugin'] !== $this->basename ) {
+			return $source;
+		}
 		global $wp_filesystem;
-		$target = trailingslashit( $remote_source ) . $this->slug . '/';
-		if ( untrailingslashit( $source ) === untrailingslashit( $target ) ) return $source;
-		// GitHub tag archives have generated folder names; normalize before installation.
-		if ( $wp_filesystem && $wp_filesystem->is_dir( $source ) ) {
-			if ( $wp_filesystem->is_dir( $target ) ) $wp_filesystem->delete( $target, true );
-			if ( $wp_filesystem->move( $source, $target, true ) ) return $target;
+		$new = trailingslashit( $remote_source ) . $this->slug . '/';
+		if ( untrailingslashit( $source ) === untrailingslashit( $new ) ) {
+			return $source;
+		}
+		if ( $wp_filesystem && $wp_filesystem->move( $source, $new, true ) ) {
+			return $new;
 		}
 		return $source;
 	}
@@ -231,7 +231,7 @@ function vawc_pro_state( $force = false ) {
 	$verified_live = $same_email && ! empty( $cache['verified_live'] );
 	$valid_cached = $verified_live && isset( $cache['state'] ) && 'active' === $cache['state'];
 
-	// Old cached PRO flags are not trusted: they may have come from a Freemius Sandbox test.
+	// Старий кеш PRO не вважаємо підтвердженням: він міг бути створений Sandbox-покупкою.
 	if ( ! $force && $verified_live && $checked && ( time() - $checked ) < 5 * MINUTE_IN_SECONDS ) {
 		return $cache;
 	}
@@ -546,6 +546,7 @@ function vawc_page_settings() {
 		update_option( 'vawc_rbg_api', sanitize_text_field( wp_unslash( isset( $_POST['rbg_api'] ) ? $_POST['rbg_api'] : '' ) ) );
 		update_option( 'vawc_draft', isset( $_POST['draft'] ) ? '1' : '0' );
 		delete_transient( 'vawc_paybox_service_' . md5( function_exists( 'determine_locale' ) ? determine_locale() : get_locale() ) );
+		vawc_pro_state( true );
 		$lang = isset( $_POST['lang'] ) ? sanitize_key( $_POST['lang'] ) : 'auto';
 		update_option( 'vawc_lang', in_array( $lang, array( 'auto', 'uk', 'en' ), true ) ? $lang : 'auto' );
 		$valid = array_keys( get_editable_roles() );
@@ -557,45 +558,22 @@ function vawc_page_settings() {
 		update_option( 'vawc_allowed_roles', $roles );
 		$msg = '<div class="notice notice-success is-dismissible"><p>✅ ' . esc_html( vawc_t( 'Збережено!', 'Saved!' ) ) . '</p></div>';
 	}
+	if ( isset( $_POST['vawc_pro_refresh'] ) && check_admin_referer( 'vawc_cfg' ) ) {
+		vawc_pro_state( true );
+		$msg = '<div class="notice notice-success is-dismissible"><p>✅ ' . esc_html( vawc_t( 'Статус PRO оновлено.', 'PRO status refreshed.' ) ) . '</p></div>';
+	}
 	if ( isset( $_POST['vawc_check_update'] ) && check_admin_referer( 'vawc_cfg' ) ) {
-		// Примусово отримуємо реліз, не покладаючись на внутрішній 12-годинний ліміт wp_update_plugins().
 		vawc_updater()->flush();
+		delete_site_transient( 'update_plugins' );
+		wp_update_plugins();
 		$r = vawc_updater()->remote();
-
 		if ( ! $r ) {
 			$error = vawc_updater()->last_error();
 			$msg = '<div class="notice notice-error is-dismissible"><p><strong>' . esc_html( vawc_t( 'Не вдалося перевірити GitHub:', 'GitHub check failed:' ) ) . '</strong> ' . esc_html( $error ? $error : vawc_t( 'Невідома помилка. Перевірте доступ сервера до api.github.com.', 'Unknown error. Check server access to api.github.com.' ) ) . '</p></div>';
+		} elseif ( version_compare( VAWC_VERSION, $r->version, '<' ) ) {
+			$msg = '<div class="notice notice-info is-dismissible"><p>' . sprintf( esc_html( vawc_t( 'GitHub доступний. Знайдено версію %1$s (встановлено %2$s). Перейдіть на сторінку «Плагіни» та натисніть «Оновити».', 'GitHub is reachable. Version %1$s found (installed %2$s). Open Plugins and click Update.' ) ), '<strong>' . esc_html( $r->version ) . '</strong>', '<strong>' . esc_html( VAWC_VERSION ) . '</strong>' ) . '</p></div>';
 		} else {
-			// Явно оновлюємо transient WordPress — саме його читає сторінка «Плагіни».
-			$updates = get_site_transient( 'update_plugins' );
-			if ( ! is_object( $updates ) ) {
-				$updates = new stdClass();
-			}
-			$updates->response = isset( $updates->response ) ? (array) $updates->response : array();
-			$updates->no_update = isset( $updates->no_update ) ? (array) $updates->no_update : array();
-			$updates->checked = isset( $updates->checked ) ? (array) $updates->checked : array();
-			$updates = vawc_updater()->check( $updates );
-			$updates->last_checked = time();
-			set_site_transient( 'update_plugins', $updates );
-
-			$plugin_file = plugin_basename( VAWC_FILE );
-			$has_update = isset( $updates->response[ $plugin_file ] )
-				&& ! empty( $updates->response[ $plugin_file ]->new_version );
-
-			if ( $has_update ) {
-				$new_version = $updates->response[ $plugin_file ]->new_version;
-				$msg = '<div class="notice notice-info is-dismissible"><p>' . sprintf(
-					esc_html( vawc_t( 'GitHub доступний. Знайдено оновлення %1$s (встановлено %2$s). Перейдіть на сторінку «Плагіни» — там має з’явитися кнопка «Оновити».', 'GitHub is reachable. Update %1$s found (installed %2$s). Open Plugins — the Update link should appear.' ) ),
-					'<strong>' . esc_html( $new_version ) . '</strong>',
-					'<strong>' . esc_html( VAWC_VERSION ) . '</strong>'
-				) . '</p></div>';
-			} else {
-				$msg = '<div class="notice notice-success is-dismissible"><p>' . sprintf(
-					esc_html( vawc_t( 'Перевірку завершено. Встановлена версія: %1$s. Останній реліз GitHub: %2$s. Оновлення не потрібне.', 'Check complete. Installed version: %1$s. Latest GitHub release: %2$s. No update is needed.' ) ),
-					esc_html( VAWC_VERSION ),
-					esc_html( $r->version )
-				) . '</p></div>';
-			}
+			$msg = '<div class="notice notice-success is-dismissible"><p>' . sprintf( esc_html( vawc_t( 'Перевірку завершено. Встановлена версія: %1$s. Останній реліз GitHub: %2$s. Оновлення не потрібне.', 'Check complete. Installed version: %1$s. Latest GitHub release: %2$s. No update is needed.' ) ), '<strong>' . esc_html( VAWC_VERSION ) . '</strong>', '<strong>' . esc_html( $r->version ) . '</strong>' ) . '</p></div>';
 		}
 	}
 
@@ -603,6 +581,8 @@ function vawc_page_settings() {
 	$draft = get_option( 'vawc_draft', '1' );
 	$roles = (array) get_option( 'vawc_allowed_roles', array( 'administrator', 'vawc_manager' ) );
 	$lang  = get_option( 'vawc_lang', 'auto' );
+	$svc   = vawc_paybox_service();
+	$pst   = vawc_pro_state();
 	?>
 	<div class="wrap">
 		<h1>
@@ -651,6 +631,19 @@ function vawc_page_settings() {
 			</p>
 		</form>
 
+		<hr>
+		<h2>💰 PRO / Freemius</h2>
+		<table class="widefat striped" style="max-width:760px"><tbody>
+			<tr><td><?php echo esc_html( vawc_t( 'Ціна PRO з UA Pay Box', 'PRO price from UA Pay Box' ) ); ?></td><td><strong><?php echo esc_html( vawc_pro_price() ? vawc_pro_price() : vawc_t( 'Ціна ще не налаштована', 'Price is not configured yet' ) ); ?></strong></td></tr>
+			<tr><td><?php echo esc_html( vawc_t( 'Посилання Freemius', 'Freemius checkout' ) ); ?></td><td><?php echo vawc_checkout_url() ? '🟢 ' . esc_html( vawc_t( 'Налаштовано', 'Configured' ) ) : '🔴 ' . esc_html( vawc_t( 'Не налаштовано в UA Pay Box', 'Not configured in UA Pay Box' ) ); ?></td></tr>
+			<tr><td><?php echo esc_html( vawc_t( 'Email для підтвердження покупки', 'Purchase verification email' ) ); ?></td><td><strong><?php echo esc_html( get_option( 'admin_email' ) ); ?></strong></td></tr>
+			<tr><td><?php echo esc_html( vawc_t( 'Статус PRO', 'PRO status' ) ); ?></td><td><?php echo vawc_is_pro() ? '✅ PRO — ' . esc_html( vawc_t( 'без обмежень', 'unlimited' ) ) : 'FREE'; ?> · <?php echo (int) vawc_count(); ?>/<?php echo (int) vawc_limit(); ?></td></tr>
+		</tbody></table>
+		<p><?php echo esc_html( vawc_t( 'Free: 25 успішно створених товарів. PRO: необмежена кількість товарів, разова оплата, безстроковий доступ, безкоштовні оновлення та пріоритетна підтримка. Оплата проводиться на сторінці Freemius; ліцензійний ключ вводити не потрібно. Ціна в гривнях надходить із Pay Box за курсом НБУ.', 'Free: 25 successfully created products. PRO: unlimited products, one-time payment, lifetime access, free updates and priority support. Payment is processed on Freemius; no license key entry is required. UAH pricing is supplied by Pay Box using the NBU rate.' ) ); ?></p>
+		<form method="post" style="margin-top:10px"><?php wp_nonce_field( 'vawc_cfg' ); ?>
+			<button type="submit" name="vawc_pro_refresh" value="1" class="button">🔄 <?php echo esc_html( vawc_t( 'Перевірити оплату / оновити статус PRO', 'Check payment / refresh PRO status' ) ); ?></button>
+			<a class="button" href="<?php echo esc_url( 'https://uaserver.pp.ua/wp-admin/admin.php?page=upb-services' ); ?>" target="_blank" rel="noopener"><?php echo esc_html( vawc_t( 'Налаштування UA Pay Box', 'UA Pay Box settings' ) ); ?></a>
+		</form>
 	</div>
 	<?php
 }
@@ -724,9 +717,7 @@ function vawc_page_main() {
 	if ( ! current_user_can( 'vawc_use' ) ) {
 		wp_die( esc_html( vawc_t( 'Доступ заборонено', 'Access denied' ) ) );
 	}
-	// Кожне відкриття сторінки виконує актуальну перевірку через UA Pay Box.
-	$pst     = vawc_pro_state( true );
-	$pro     = isset( $pst['state'] ) && 'active' === $pst['state'] && ( empty( $pst['expires'] ) || (int) $pst['expires'] > time() );
+	$pro     = vawc_is_pro();
 	$draft   = '1' === get_option( 'vawc_draft', '1' );
 	$has_rbg = '' !== (string) get_option( 'vawc_rbg_api', '' );
 	$exp_url = add_query_arg( array( 'action' => 'vawc_export', 'nonce' => wp_create_nonce( 'vawc_nonce' ) ), admin_url( 'admin-ajax.php' ) );
@@ -742,26 +733,23 @@ function vawc_page_main() {
 			</div>
 		</div>
 
-		<?php
-		$vawc_count = vawc_count();
-		$vawc_limit = vawc_limit();
-		$vawc_left  = vawc_remaining();
-		$vawc_price = vawc_pro_price();
-		?>
-		<div class="va-pro-card">
-			<div class="va-pro-card__top">
-				<strong><?php if ( $pro ) : ?>✅ PRO — <?php echo esc_html( vawc_t( 'активний · без обмежень', 'active · unlimited' ) ); ?><?php else : ?>FREE — <?php echo esc_html( vawc_t( 'безкоштовний тариф', 'free plan' ) ); ?><?php endif; ?></strong>
-				<span>📦 <?php echo esc_html( vawc_t( 'Створено товарів:', 'Products created:' ) ); ?> <strong id="va_created" data-limit="<?php echo (int) $vawc_limit; ?>"><?php echo (int) $vawc_count; ?></strong><?php if ( ! $pro ) : ?> / <?php echo (int) $vawc_limit; ?> · <?php echo esc_html( vawc_t( 'залишилося:', 'remaining:' ) ); ?> <strong id="va_left"><?php echo (int) $vawc_left; ?></strong><?php else : ?> · <?php echo esc_html( vawc_t( 'без обмежень', 'unlimited' ) ); ?><?php endif; ?></span>
-			</div>
-			<p><?php echo esc_html( vawc_t( 'FREE: 25 успішно створених товарів. PRO: необмежена кількість товарів, разова оплата, безстроковий доступ, безкоштовні оновлення та пріоритетна підтримка. PRO активується лише після підтвердження бойової (не тестової Sandbox) покупки Freemius через UA Pay Box.', 'FREE: 25 successfully created products. PRO: unlimited products, one-time payment, lifetime access, free updates and priority support.' ) ); ?></p>
-			<div class="va-pro-card__upgrade">
-				<div><strong><?php echo esc_html( vawc_t( 'Перейти на PRO', 'Upgrade to PRO' ) ); ?></strong> <?php if ( $vawc_price ) : ?>· <?php echo esc_html( $vawc_price ); ?><?php else : ?>· <?php echo esc_html( vawc_t( 'Ціна тимчасово недоступна', 'Price temporarily unavailable' ) ); ?><?php endif; ?></div>
-				<?php if ( ! $pro ) : ?>
+		<?php $pst = vawc_pro_state(); ?>
+		<?php if ( $pro ) : ?>
+			<div class="va-pro-bar va-pro-ok">✅ PRO — <?php echo esc_html( vawc_t( 'необмежена кількість товарів', 'unlimited products' ) ); ?></div>
+		<?php else : ?>
+			<div class="va-pro-card">
+				<div class="va-pro-card__top">
+					<strong>FREE — <?php echo esc_html( vawc_t( 'безкоштовний тариф', 'free plan' ) ); ?></strong>
+					<span>📦 <?php echo esc_html( vawc_t( 'Залишилося товарів:', 'Products remaining:' ) ); ?> <strong id="va_left"><?php echo (int) vawc_remaining(); ?></strong> / <?php echo (int) vawc_limit(); ?></span>
+				</div>
+				<p><?php echo esc_html( vawc_t( 'Безкоштовно можна створити 25 товарів. Рекомендуємо оформити PRO до вичерпання безкоштовного ліміту, щоб і надалі створювати товари без обмежень.', 'Create 25 products for free. We recommend upgrading to PRO before reaching the free limit to continue creating products without restrictions.' ) ); ?></p>
+				<div class="va-pro-card__upgrade">
+					<div><strong>PRO</strong> <?php $vawc_price = vawc_pro_price(); if ( $vawc_price ) : ?>· <?php echo esc_html( $vawc_price ); ?><?php else : ?>· <?php echo esc_html( vawc_t( 'Ціна тимчасово недоступна', 'Price temporarily unavailable' ) ); ?><?php endif; ?></div>
 					<?php echo vawc_buy_button( vawc_t( 'Придбати PRO', 'Buy PRO' ) ); // phpcs:ignore ?>
-				<?php endif; ?>
+				</div>
+				<small><?php echo esc_html( vawc_t( 'Разова оплата · безстроковий доступ · безкоштовні оновлення · пріоритетна підтримка. Якщо валюта оплати відрізняється від гривні, банк покупця перерахує суму в гривні за власним курсом.', 'One-time payment · lifetime access · free updates · priority support. If the payment currency differs from UAH, the buyer’s bank converts the amount into UAH using its own exchange rate.' ) ); ?></small>
 			</div>
-			<small><?php echo esc_html( vawc_t( 'Оплата проводиться на сторінці Freemius. Ліцензійний ключ вводити не потрібно. Ціна в гривнях надходить із UA Pay Box за курсом НБУ.', 'Payment is processed on Freemius. No license key is required. The UAH price is supplied by UA Pay Box using the NBU exchange rate.' ) ); ?></small>
-		</div>
+		<?php endif; ?>
 
 		<video id="va_cam" autoplay playsinline muted></video>
 		<div id="va_gal" class="va-gal"></div>
