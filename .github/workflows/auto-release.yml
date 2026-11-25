@@ -1,0 +1,65 @@
+name: Automatic Plugin Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "voice-add-woocommerce.php"
+      - ".github/workflows/auto-release.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create release when plugin version increases
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version and create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          HEADER_VERSION="$(sed -n 's/^[[:space:]]*\* Version:[[:space:]]*//p' voice-add-woocommerce.php | head -n 1 | tr -d '\r')"
+          CONSTANT_VERSION="$(sed -n "s/^[[:space:]]*define([[:space:]]*'VAWC_VERSION',[[:space:]]*'\\([^']*\\)'.*/\\1/p" voice-add-woocommerce.php | head -n 1)"
+
+          if [[ -z "$HEADER_VERSION" || "$HEADER_VERSION" != "$CONSTANT_VERSION" ]]; then
+            echo "::error::Version mismatch. Plugin header='$HEADER_VERSION', VAWC_VERSION='$CONSTANT_VERSION'."
+            exit 1
+          fi
+
+          if [[ ! "$HEADER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid plugin version: $HEADER_VERSION"
+            exit 1
+          fi
+
+          NEW_TAG="v$HEADER_VERSION"
+          LATEST_TAG="$(gh release list --limit 1 --json tagName --jq '.[0].tagName // ""')"
+
+          if [[ -n "$LATEST_TAG" ]]; then
+            HIGHEST="$(printf '%s\n%s\n' "$LATEST_TAG" "$NEW_TAG" | sort -V | tail -n 1)"
+            if [[ "$HIGHEST" != "$NEW_TAG" || "$LATEST_TAG" == "$NEW_TAG" ]]; then
+              echo "No release: $NEW_TAG is not newer than the latest release ($LATEST_TAG)."
+              exit 0
+            fi
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$NEW_TAG" >/dev/null 2>&1; then
+            echo "No release: tag $NEW_TAG already exists."
+            exit 0
+          fi
+
+          gh release create "$NEW_TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$NEW_TAG" \
+            --generate-notes
+
+          echo "Created release $NEW_TAG"
