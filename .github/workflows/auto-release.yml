@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - "voice-add-woocommerce.php"
+      - "**/*.php"
+      - "assets/*.js"
       - ".github/workflows/auto-release.yml"
 
 permissions:
@@ -20,6 +22,24 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Set up PHP 7.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '7.4'
+          extensions: mbstring
+          coverage: none
+
+      - name: Check PHP and JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            php -l "$file"
+          done < <(find . -type f -name '*.php' -not -path './.git/*' -print0)
+          if [[ -f assets/app.js ]]; then
+            node --check assets/app.js
+          fi
 
       - name: Validate version and create release
         env:
