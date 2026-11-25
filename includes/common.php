@@ -228,11 +228,11 @@ function vawc_updater() {
 vawc_updater();
 
 /* ====================================================================== */
-/* 3. PRO ЧЕРЕЗ FREEMIUS + UA PAY BOX                                      */
+/* 3. PRO ЧЕРЕЗ FREEMIUS                                                   */
 /* ====================================================================== */
 function vawc_paybox_url() { return untrailingslashit( VAWC_HUB ); }
 
-/** Публічні дані тарифу та ціна надходять із центрального UA Pay Box. */
+/** Службове отримання посилання на Freemius Checkout. Ціна тут не використовується. */
 function vawc_paybox_service( $force = false ) {
 	$locale = function_exists( 'determine_locale' ) ? determine_locale() : get_locale();
 	$key = 'vawc_paybox_service_' . md5( $locale );
@@ -261,13 +261,41 @@ function vawc_checkout_url() {
 		'cancel_url' => admin_url( 'admin.php?page=vawc_main' ),
 	), $url ) );
 }
+/**
+ * Freemius: базова ціна — 33 USD.
+ * Англомовний інтерфейс показує USD; україномовний — еквівалент у гривні
+ * за офіційним курсом НБУ. UA Pay Box не бере участі у формуванні ціни.
+ */
 function vawc_pro_price() {
-	$service = vawc_paybox_service();
-	// Якщо в кеші ще немає ціни, одразу повторно запитуємо UA Pay Box.
-	if ( empty( $service['price'] ) ) {
-		$service = vawc_paybox_service( true );
+	if ( vawc_en() ) {
+		return '$33';
 	}
-	return ! empty( $service['price'] ) ? sanitize_text_field( $service['price'] ) : '';
+
+	$rate = get_transient( 'vawc_freemius_usd_nbu_rate' );
+	if ( false === $rate || ! is_numeric( $rate ) || (float) $rate <= 0 ) {
+		$response = wp_remote_get(
+			'https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?valcode=USD&json',
+			array(
+				'timeout'     => 10,
+				'redirection' => 2,
+				'headers'     => array( 'Accept' => 'application/json' ),
+			)
+		);
+		if ( ! is_wp_error( $response ) && 200 === (int) wp_remote_retrieve_response_code( $response ) ) {
+			$data = json_decode( wp_remote_retrieve_body( $response ), true );
+			if ( is_array( $data ) && ! empty( $data[0]['rate'] ) && is_numeric( $data[0]['rate'] ) ) {
+				$rate = (float) $data[0]['rate'];
+				set_transient( 'vawc_freemius_usd_nbu_rate', $rate, 12 * HOUR_IN_SECONDS );
+			}
+		}
+	}
+
+	if ( is_numeric( $rate ) && (float) $rate > 0 ) {
+		return number_format_i18n( (int) round( 33 * (float) $rate ), 0 ) . ' грн';
+	}
+
+	// Не підміняємо ціну старим значенням з UA Pay Box, якщо НБУ тимчасово недоступний.
+	return '33 USD';
 }
 
 /** Перевірка покупки через email у центральному Pay Box; ключ вводити не потрібно. */
@@ -596,7 +624,6 @@ function vawc_page_settings() {
 	if ( isset( $_POST['vawc_save'] ) && check_admin_referer( 'vawc_cfg' ) ) {
 		update_option( 'vawc_rbg_api', sanitize_text_field( wp_unslash( isset( $_POST['rbg_api'] ) ? $_POST['rbg_api'] : '' ) ) );
 		update_option( 'vawc_draft', isset( $_POST['draft'] ) ? '1' : '0' );
-		delete_transient( 'vawc_paybox_service_' . md5( function_exists( 'determine_locale' ) ? determine_locale() : get_locale() ) );
 		vawc_pro_state( true );
 		$lang = isset( $_POST['lang'] ) ? sanitize_key( $_POST['lang'] ) : 'auto';
 		update_option( 'vawc_lang', in_array( $lang, array( 'auto', 'uk', 'en' ), true ) ? $lang : 'auto' );
@@ -632,8 +659,6 @@ function vawc_page_settings() {
 	$draft = get_option( 'vawc_draft', '1' );
 	$roles = (array) get_option( 'vawc_allowed_roles', array( 'administrator', 'vawc_manager' ) );
 	$lang  = get_option( 'vawc_lang', 'auto' );
-	$svc   = vawc_paybox_service();
-	$pst   = vawc_pro_state();
 	?>
 	<div class="wrap">
 		<h1>
@@ -682,19 +707,6 @@ function vawc_page_settings() {
 			</p>
 		</form>
 
-		<hr>
-		<h2>💰 PRO / Freemius</h2>
-		<table class="widefat striped" style="max-width:760px"><tbody>
-			<tr><td><?php echo esc_html( vawc_t( 'Ціна PRO з UA Pay Box', 'PRO price from UA Pay Box' ) ); ?></td><td><strong><?php echo esc_html( vawc_pro_price() ? vawc_pro_price() : vawc_t( 'Ціна ще не налаштована', 'Price is not configured yet' ) ); ?></strong></td></tr>
-			<tr><td><?php echo esc_html( vawc_t( 'Посилання Freemius', 'Freemius checkout' ) ); ?></td><td><?php echo vawc_checkout_url() ? '🟢 ' . esc_html( vawc_t( 'Налаштовано', 'Configured' ) ) : '🔴 ' . esc_html( vawc_t( 'Не налаштовано в UA Pay Box', 'Not configured in UA Pay Box' ) ); ?></td></tr>
-			<tr><td><?php echo esc_html( vawc_t( 'Email для підтвердження покупки', 'Purchase verification email' ) ); ?></td><td><strong><?php echo esc_html( get_option( 'admin_email' ) ); ?></strong></td></tr>
-			<tr><td><?php echo esc_html( vawc_t( 'Статус PRO', 'PRO status' ) ); ?></td><td><?php echo vawc_is_pro() ? '✅ PRO — ' . esc_html( vawc_t( 'без обмежень', 'unlimited' ) ) : 'FREE'; ?> · <?php echo (int) vawc_count(); ?>/<?php echo (int) vawc_limit(); ?></td></tr>
-		</tbody></table>
-		<p><?php echo esc_html( vawc_t( 'Free: 25 успішно створених товарів. PRO: необмежена кількість товарів, разова оплата, безстроковий доступ, безкоштовні оновлення та пріоритетна підтримка. Оплата проводиться на сторінці Freemius; ліцензійний ключ вводити не потрібно. Ціна в гривнях надходить із Pay Box за курсом НБУ.', 'Free: 25 successfully created products. PRO: unlimited products, one-time payment, lifetime access, free updates and priority support. Payment is processed on Freemius; no license key entry is required. UAH pricing is supplied by Pay Box using the NBU rate.' ) ); ?></p>
-		<form method="post" style="margin-top:10px"><?php wp_nonce_field( 'vawc_cfg' ); ?>
-			<button type="submit" name="vawc_pro_refresh" value="1" class="button">🔄 <?php echo esc_html( vawc_t( 'Перевірити оплату / оновити статус PRO', 'Check payment / refresh PRO status' ) ); ?></button>
-			<a class="button" href="<?php echo esc_url( 'https://uaserver.pp.ua/wp-admin/admin.php?page=upb-services' ); ?>" target="_blank" rel="noopener"><?php echo esc_html( vawc_t( 'Налаштування UA Pay Box', 'UA Pay Box settings' ) ); ?></a>
-		</form>
 	</div>
 	<?php
 }
