@@ -37,7 +37,8 @@ class VAWC_Updater {
 
 	public function __construct( $file, $repo, $version ) {
 		$this->basename = plugin_basename( $file );
-		$this->slug = dirname( $this->basename );
+		$plugin_dir = dirname( $this->basename );
+		$this->slug = ( '.' === $plugin_dir || '/' === $plugin_dir ) ? basename( $this->repo ) : $plugin_dir;
 		$this->repo = $repo;
 		$this->version = $version;
 		add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'check' ) );
@@ -557,17 +558,44 @@ function vawc_page_settings() {
 		$msg = '<div class="notice notice-success is-dismissible"><p>✅ ' . esc_html( vawc_t( 'Збережено!', 'Saved!' ) ) . '</p></div>';
 	}
 	if ( isset( $_POST['vawc_check_update'] ) && check_admin_referer( 'vawc_cfg' ) ) {
+		// Примусово отримуємо реліз, не покладаючись на внутрішній 12-годинний ліміт wp_update_plugins().
 		vawc_updater()->flush();
-		delete_site_transient( 'update_plugins' );
-		wp_update_plugins();
 		$r = vawc_updater()->remote();
+
 		if ( ! $r ) {
 			$error = vawc_updater()->last_error();
 			$msg = '<div class="notice notice-error is-dismissible"><p><strong>' . esc_html( vawc_t( 'Не вдалося перевірити GitHub:', 'GitHub check failed:' ) ) . '</strong> ' . esc_html( $error ? $error : vawc_t( 'Невідома помилка. Перевірте доступ сервера до api.github.com.', 'Unknown error. Check server access to api.github.com.' ) ) . '</p></div>';
-		} elseif ( version_compare( VAWC_VERSION, $r->version, '<' ) ) {
-			$msg = '<div class="notice notice-info is-dismissible"><p>' . sprintf( esc_html( vawc_t( 'GitHub доступний. Знайдено версію %1$s (встановлено %2$s). Перейдіть на сторінку «Плагіни» та натисніть «Оновити».', 'GitHub is reachable. Version %1$s found (installed %2$s). Open Plugins and click Update.' ) ), '<strong>' . esc_html( $r->version ) . '</strong>', '<strong>' . esc_html( VAWC_VERSION ) . '</strong>' ) . '</p></div>';
 		} else {
-			$msg = '<div class="notice notice-success is-dismissible"><p>' . sprintf( esc_html( vawc_t( 'Перевірку завершено. Встановлена версія: %1$s. Останній реліз GitHub: %2$s. Оновлення не потрібне.', 'Check complete. Installed version: %1$s. Latest GitHub release: %2$s. No update is needed.' ) ), '<strong>' . esc_html( VAWC_VERSION ) . '</strong>', '<strong>' . esc_html( $r->version ) . '</strong>' ) . '</p></div>';
+			// Явно оновлюємо transient WordPress — саме його читає сторінка «Плагіни».
+			$updates = get_site_transient( 'update_plugins' );
+			if ( ! is_object( $updates ) ) {
+				$updates = new stdClass();
+			}
+			$updates->response = isset( $updates->response ) ? (array) $updates->response : array();
+			$updates->no_update = isset( $updates->no_update ) ? (array) $updates->no_update : array();
+			$updates->checked = isset( $updates->checked ) ? (array) $updates->checked : array();
+			$updates = vawc_updater()->check( $updates );
+			$updates->last_checked = time();
+			set_site_transient( 'update_plugins', $updates );
+
+			$plugin_file = plugin_basename( VAWC_FILE );
+			$has_update = isset( $updates->response[ $plugin_file ] )
+				&& ! empty( $updates->response[ $plugin_file ]->new_version );
+
+			if ( $has_update ) {
+				$new_version = $updates->response[ $plugin_file ]->new_version;
+				$msg = '<div class="notice notice-info is-dismissible"><p>' . sprintf(
+					esc_html( vawc_t( 'GitHub доступний. Знайдено оновлення %1$s (встановлено %2$s). Перейдіть на сторінку «Плагіни» — там має з’явитися кнопка «Оновити».', 'GitHub is reachable. Update %1$s found (installed %2$s). Open Plugins — the Update link should appear.' ) ),
+					'<strong>' . esc_html( $new_version ) . '</strong>',
+					'<strong>' . esc_html( VAWC_VERSION ) . '</strong>'
+				) . '</p></div>';
+			} else {
+				$msg = '<div class="notice notice-success is-dismissible"><p>' . sprintf(
+					esc_html( vawc_t( 'Перевірку завершено. Встановлена версія: %1$s. Останній реліз GitHub: %2$s. Оновлення не потрібне.', 'Check complete. Installed version: %1$s. Latest GitHub release: %2$s. No update is needed.' ) ),
+					esc_html( VAWC_VERSION ),
+					esc_html( $r->version )
+				) . '</p></div>';
+			}
 		}
 	}
 
