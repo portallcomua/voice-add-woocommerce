@@ -258,7 +258,7 @@ function vawc_pro_state( $force = false ) {
 			: array( 'state' => 'free', 'expires' => 0, 'checked' => $checked, 'email' => $email, 'verified_live' => false );
 	}
 
-	$is_live = 0 === (int) $data['environment'];
+	$is_live = isset( $data['environment'] ) && 0 === (int) $data['environment'];
 	$active = ! empty( $data['valid'] ) && $is_live;
 	$state = array(
 		'state' => $active ? 'active' : 'free',
