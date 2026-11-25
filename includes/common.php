@@ -137,7 +137,7 @@ class VAWC_Updater {
 		}
 
 		$repo_path = preg_quote( $this->repo, '~' );
-		if ( ! preg_match( '~/' . $repo_path . '/releases/tag/([^"\\'?#/<>]+)~i', $page_body, $match ) ) {
+		if ( ! preg_match( '~/' . $repo_path . '/releases/tag/([^"?#/<>]+)~i', $page_body, $match ) ) {
 			$this->last_error = trim( $api_error . '; Не вдалося визначити тег останнього релізу на сторінці GitHub.', '; ' );
 			return null;
 		}
@@ -160,6 +160,12 @@ class VAWC_Updater {
 	public function check( $t ) {
 		if ( ! is_object( $t ) ) {
 			return $t;
+		}
+		if ( ! isset( $t->response ) || ! is_array( $t->response ) ) {
+			$t->response = array();
+		}
+		if ( ! isset( $t->no_update ) || ! is_array( $t->no_update ) ) {
+			$t->no_update = array();
 		}
 		$r = $this->remote();
 		if ( $r && ! empty( $r->zip ) && version_compare( $this->version, $r->version, '<' ) ) {
