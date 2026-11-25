@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   release:
-    name: Create release when plugin version increases
+    name: Build installable ZIP and publish latest release
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -41,7 +41,19 @@ jobs:
             node --check assets/app.js
           fi
 
-      - name: Validate version and create release
+      - name: Build WordPress installable ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_ROOT="$RUNNER_TEMP/plugin-package"
+          mkdir -p "$PACKAGE_ROOT/voice-add-woocommerce"
+          rsync -a ./ "$PACKAGE_ROOT/voice-add-woocommerce/" \
+            --exclude='.git/' \
+            --exclude='.github/'
+          (cd "$PACKAGE_ROOT" && zip -qr "$GITHUB_WORKSPACE/voice-add-woocommerce.zip" voice-add-woocommerce)
+          test -s "$GITHUB_WORKSPACE/voice-add-woocommerce.zip"
+
+      - name: Validate version and publish ZIP to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
@@ -62,24 +74,29 @@ jobs:
           fi
 
           NEW_TAG="v$HEADER_VERSION"
-          LATEST_TAG="$(gh release list --limit 1 --json tagName --jq '.[0].tagName // ""')"
 
-          if [[ -n "$LATEST_TAG" ]]; then
-            HIGHEST="$(printf '%s\n%s\n' "$LATEST_TAG" "$NEW_TAG" | sort -V | tail -n 1)"
-            if [[ "$HIGHEST" != "$NEW_TAG" || "$LATEST_TAG" == "$NEW_TAG" ]]; then
-              echo "No release: $NEW_TAG is not newer than the latest release ($LATEST_TAG)."
-              exit 0
+          if gh release view "$NEW_TAG" >/dev/null 2>&1; then
+            echo "Release $NEW_TAG already exists; refreshing its installable ZIP."
+          else
+            LATEST_TAG="$(gh release list --limit 1 --json tagName --jq '.[0].tagName // ""')"
+            if [[ -n "$LATEST_TAG" ]]; then
+              HIGHEST="$(printf '%s\n%s\n' "$LATEST_TAG" "$NEW_TAG" | sort -V | tail -n 1)"
+              if [[ "$HIGHEST" != "$NEW_TAG" ]]; then
+                echo "::error::Refusing to publish older version $NEW_TAG; latest release is $LATEST_TAG."
+                exit 1
+              fi
             fi
+
+            if git ls-remote --exit-code --tags origin "refs/tags/$NEW_TAG" >/dev/null 2>&1; then
+              echo "::error::Tag $NEW_TAG exists but its GitHub Release is missing."
+              exit 1
+            fi
+
+            gh release create "$NEW_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "$NEW_TAG" \
+              --generate-notes
           fi
 
-          if git ls-remote --exit-code --tags origin "refs/tags/$NEW_TAG" >/dev/null 2>&1; then
-            echo "No release: tag $NEW_TAG already exists."
-            exit 0
-          fi
-
-          gh release create "$NEW_TAG" \
-            --target "$GITHUB_SHA" \
-            --title "$NEW_TAG" \
-            --generate-notes
-
-          echo "Created release $NEW_TAG"
+          gh release upload "$NEW_TAG" voice-add-woocommerce.zip --clobber
+          echo "Published installable ZIP for $NEW_TAG"
