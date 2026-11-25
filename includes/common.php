@@ -232,35 +232,16 @@ vawc_updater();
 /* ====================================================================== */
 function vawc_paybox_url() { return untrailingslashit( VAWC_HUB ); }
 
-/** Службове отримання посилання на Freemius Checkout. Ціна тут не використовується. */
-function vawc_paybox_service( $force = false ) {
-	$locale = function_exists( 'determine_locale' ) ? determine_locale() : get_locale();
-	$key = 'vawc_paybox_service_' . md5( $locale );
-	$cached = get_transient( $key );
-	if ( ! $force && is_array( $cached ) ) return $cached;
-	$url = add_query_arg( array( 'service' => 'voice-add-woocommerce', 'locale' => $locale ), vawc_paybox_url() . '/wp-json/upb/v1/service' );
-	$response = wp_remote_get( $url, array( 'timeout' => 12, 'redirection' => 2, 'headers' => array( 'Accept' => 'application/json' ) ) );
-	if ( ! is_wp_error( $response ) && 200 === (int) wp_remote_retrieve_response_code( $response ) ) {
-		$data = json_decode( wp_remote_retrieve_body( $response ), true );
-		if ( is_array( $data ) && ! empty( $data['checkout_url'] ) ) {
-			set_transient( $key, $data, ! empty( $data['price'] ) ? 12 * HOUR_IN_SECONDS : 10 * MINUTE_IN_SECONDS );
-			return $data;
-		}
-	}
-	return is_array( $cached ) ? $cached : array();
-}
-
-/** Hosted Checkout прив'язує покупку до email адміністратора WordPress. */
+/** Пряме посилання на Freemius Checkout (product 46141, plan 81250). */
 function vawc_checkout_url() {
-	$service = vawc_paybox_service();
-	$url = ! empty( $service['checkout_url'] ) ? $service['checkout_url'] : '';
-	if ( ! $url ) return '';
+	$url = 'https://checkout.freemius.com/product/46141/plan/81250/';
 	return esc_url( add_query_arg( array(
 		'user_email' => sanitize_email( get_option( 'admin_email' ) ),
 		'readonly_user' => 'true',
 		'cancel_url' => admin_url( 'admin.php?page=vawc_main' ),
 	), $url ) );
 }
+
 /**
  * Freemius: базова ціна — 33 USD.
  * Англомовний інтерфейс показує USD; україномовний — еквівалент у гривні
