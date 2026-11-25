@@ -227,26 +227,47 @@ function vawc_pro_state( $force = false ) {
 	$cache = is_array( $cache ) ? $cache : array();
 	$checked = isset( $cache['checked'] ) ? (int) $cache['checked'] : 0;
 	$same_email = isset( $cache['email'] ) && strtolower( $cache['email'] ) === strtolower( $email );
-	$valid = $same_email && isset( $cache['state'] ) && 'active' === $cache['state'];
-	if ( ! $force && $same_email && $checked && ( time() - $checked ) < 5 * MINUTE_IN_SECONDS ) return $cache;
-	if ( ! $email || ! is_email( $email ) ) return array( 'state' => 'free', 'expires' => 0, 'checked' => time(), 'email' => $email );
+	$verified_live = $same_email && ! empty( $cache['verified_live'] );
+	$valid_cached = $verified_live && isset( $cache['state'] ) && 'active' === $cache['state'];
+
+	// Old cached PRO flags are not trusted: they may have come from a Freemius Sandbox test.
+	if ( ! $force && $verified_live && $checked && ( time() - $checked ) < 5 * MINUTE_IN_SECONDS ) {
+		return $cache;
+	}
+	if ( ! $email || ! is_email( $email ) ) {
+		return array( 'state' => 'free', 'expires' => 0, 'checked' => time(), 'email' => $email, 'verified_live' => false );
+	}
+
 	$response = wp_remote_post( vawc_paybox_url() . '/wp-json/upb/v1/license/status', array(
-		'timeout' => 12, 'redirection' => 2, 'headers' => array( 'Accept' => 'application/json' ),
+		'timeout' => 12,
+		'redirection' => 2,
+		'headers' => array( 'Accept' => 'application/json' ),
 		'body' => array( 'service' => 'voice-add-woocommerce', 'email' => $email ),
 	) );
+
 	if ( is_wp_error( $response ) ) {
-		return $valid && $checked && ( time() - $checked ) <= 7 * DAY_IN_SECONDS ? $cache : array( 'state' => 'free', 'expires' => 0, 'checked' => $checked, 'email' => $email );
+		return $valid_cached && $checked && ( time() - $checked ) <= 7 * DAY_IN_SECONDS
+			? $cache
+			: array( 'state' => 'free', 'expires' => 0, 'checked' => $checked, 'email' => $email, 'verified_live' => false );
 	}
 	$code = (int) wp_remote_retrieve_response_code( $response );
 	$data = json_decode( wp_remote_retrieve_body( $response ), true );
-	if ( 200 !== $code || ! is_array( $data ) || ! array_key_exists( 'valid', $data ) ) {
-		return $valid && $checked && ( time() - $checked ) <= 7 * DAY_IN_SECONDS ? $cache : array( 'state' => 'free', 'expires' => 0, 'checked' => $checked, 'email' => $email );
+	if ( 200 !== $code || ! is_array( $data ) || ! array_key_exists( 'valid', $data ) || ! array_key_exists( 'environment', $data ) ) {
+		return $valid_cached && $checked && ( time() - $checked ) <= 7 * DAY_IN_SECONDS
+			? $cache
+			: array( 'state' => 'free', 'expires' => 0, 'checked' => $checked, 'email' => $email, 'verified_live' => false );
 	}
+
+	$is_live = 0 === (int) $data['environment'];
+	$active = ! empty( $data['valid'] ) && $is_live;
 	$state = array(
-		'state' => ! empty( $data['valid'] ) ? 'active' : 'free',
+		'state' => $active ? 'active' : 'free',
 		'expires' => isset( $data['expires'] ) ? absint( $data['expires'] ) : 0,
-		'checked' => time(), 'email' => $email,
+		'checked' => time(),
+		'email' => $email,
 		'status' => isset( $data['status'] ) ? sanitize_key( $data['status'] ) : 'unknown',
+		'environment' => $is_live ? 'production' : 'sandbox_or_unverified',
+		'verified_live' => true,
 	);
 	update_option( 'vawc_freemius_pro', $state, false );
 	return $state;
@@ -704,9 +725,9 @@ function vawc_page_main() {
 				<strong><?php if ( $pro ) : ?>✅ PRO — <?php echo esc_html( vawc_t( 'активний · без обмежень', 'active · unlimited' ) ); ?><?php else : ?>FREE — <?php echo esc_html( vawc_t( 'безкоштовний тариф', 'free plan' ) ); ?><?php endif; ?></strong>
 				<span>📦 <?php echo esc_html( vawc_t( 'Створено товарів:', 'Products created:' ) ); ?> <strong id="va_created" data-limit="<?php echo (int) $vawc_limit; ?>"><?php echo (int) $vawc_count; ?></strong><?php if ( ! $pro ) : ?> / <?php echo (int) $vawc_limit; ?> · <?php echo esc_html( vawc_t( 'залишилося:', 'remaining:' ) ); ?> <strong id="va_left"><?php echo (int) $vawc_left; ?></strong><?php else : ?> · <?php echo esc_html( vawc_t( 'без обмежень', 'unlimited' ) ); ?><?php endif; ?></span>
 			</div>
-			<p><?php echo esc_html( vawc_t( 'FREE: 25 успішно створених товарів. PRO: необмежена кількість товарів, разова оплата, безстроковий доступ, безкоштовні оновлення та пріоритетна підтримка.', 'FREE: 25 successfully created products. PRO: unlimited products, one-time payment, lifetime access, free updates and priority support.' ) ); ?></p>
+			<p><?php echo esc_html( vawc_t( 'FREE: 25 успішно створених товарів. PRO: необмежена кількість товарів, разова оплата, безстроковий доступ, безкоштовні оновлення та пріоритетна підтримка. PRO активується лише після підтвердження бойової (не тестової Sandbox) покупки Freemius через UA Pay Box.', 'FREE: 25 successfully created products. PRO: unlimited products, one-time payment, lifetime access, free updates and priority support.' ) ); ?></p>
 			<div class="va-pro-card__upgrade">
-				<div><strong>PRO</strong> <?php if ( $vawc_price ) : ?>· <?php echo esc_html( $vawc_price ); ?><?php else : ?>· <?php echo esc_html( vawc_t( 'Ціна тимчасово недоступна', 'Price temporarily unavailable' ) ); ?><?php endif; ?></div>
+				<div><strong><?php echo esc_html( vawc_t( 'Перейти на PRO', 'Upgrade to PRO' ) ); ?></strong> <?php if ( $vawc_price ) : ?>· <?php echo esc_html( $vawc_price ); ?><?php else : ?>· <?php echo esc_html( vawc_t( 'Ціна тимчасово недоступна', 'Price temporarily unavailable' ) ); ?><?php endif; ?></div>
 				<?php if ( ! $pro ) : ?>
 					<?php echo vawc_buy_button( vawc_t( 'Придбати PRO', 'Buy PRO' ) ); // phpcs:ignore ?>
 				<?php endif; ?>
