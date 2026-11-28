@@ -70,18 +70,23 @@ Email: support@uaserver.pp.ua
 
 == External services ==
 
-The plugin does not contact the developer's servers or any licensing server during normal operation.
+The plugin makes no background requests to developer, licensing or payment servers. The only external destinations are used after an explicit user action: browser speech recognition, image URLs supplied in a CSV import, and the optional PRO information link.
 
 Browser speech recognition:
 * What it is: The browser's built-in Web Speech API or equivalent speech recognition implementation.
 * When it runs: Only after a user presses the Dictate button and grants microphone permission.
-* Data sent: Audio may be processed by the browser vendor or its configured speech recognition provider. The plugin does not receive or store audio recordings. Processing and retention are controlled by that provider.
-* Provider policies: Review the privacy policy of the browser and speech recognition provider used on your device.
+* Data sent: Audio may be processed by the browser vendor or its configured speech recognition provider. In Google Chrome, speech recognition may use Google's service. The plugin receives the resulting transcript, not the audio recording.
+* Provider policies: Google Privacy Policy: https://policies.google.com/privacy. Web Speech API information: https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API. Other browsers may use different providers and policies.
 
 Remote product images:
 * What it is: Images hosted at URLs supplied by the store administrator in a CSV import file.
 * When it runs: Only when an administrator or permitted store manager imports a CSV containing image URLs.
 * Data sent: The WordPress server requests the specified image URL to download the image. The plugin does not send store credentials or customer data with this request.
+
+UAServer PRO information page:
+* What it is: An optional product information page at https://uaserver.pp.ua/voice-add-woocommerce-pro/.
+* When it runs: Only when a user clicks the "Learn about PRO" link in the plugin's own administration page.
+* Data sent: The user's browser opens the page and sends the standard web request metadata to uaserver.pp.ua. The plugin does not send product data, site content or account credentials.
 
 == Privacy ==
 
