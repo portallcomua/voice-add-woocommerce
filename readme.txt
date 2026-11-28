@@ -98,7 +98,7 @@ The plugin stores its settings in the WordPress options table and uses WordPress
 * Prepared the free edition for the WordPress.org Plugin Directory.
 * Removed external license checks, payment integrations and GitHub-based plugin updates.
 * Removed the product quota: product creation and CSV import are not paywalled.
-* Removed the optional remove.bg integration pending the provider's announced service migration.
+* Removed the legacy background-removal API dependency from the free edition.
 * Added a non-intrusive link to the optional PRO edition.
 * Improved role setup and image URL validation.
 * Added WordPress.org readme and external-service disclosures.
