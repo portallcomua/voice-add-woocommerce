@@ -1,6 +1,6 @@
 <?php
 /**
- * Спільне ядро Voice ADD for WooCommerce.
+ * Спільне ядро Voice ADD (Voice ADD for WooCommerce PRO).
  * Language, roles, permissions, settings, product creation and CSV tools.
  */
 if ( ! defined( 'ABSPATH' ) ) {
@@ -318,12 +318,126 @@ function vawc_page_settings() {
 		update_option( 'vawc_allowed_roles', $roles );
 		$msg = '<div class="notice notice-success is-dismissible"><p>✅ ' . esc_html( vawc_t( 'Збережено!', 'Saved!' ) ) . '</p></div>';
 	}
+	$draft = get_option( 'vawc_draft', '1' );
+	$roles = (array) get_option( 'vawc_allowed_roles', array( 'administrator', 'vawc_manager' ) );
+	$lang  = get_option( 'vawc_lang', 'auto' );
+	?>
+	<div class="wrap">
+		<h1>
+			⚙️ Voice ADD for WooCommerce
+			<span style="font-size:14px;color:#666;font-weight:400">v<?php echo esc_html( VAWC_VERSION ); ?></span>
+			<a href="<?php echo esc_url( admin_url( 'admin.php?page=vawc_main' ) ); ?>" class="page-title-action">🎤 <?php echo esc_html( vawc_t( 'Перейти на плагін', 'Go to plugin' ) ); ?></a>
+		</h1>
+		<?php echo wp_kses_post( $msg ); ?>
+
+		<form method="post"><?php wp_nonce_field( 'vawc_cfg' ); ?>
+			<table class="form-table" role="presentation">
+				<tr>
+					<th><?php echo esc_html( vawc_t( 'Статус нового запису', 'New item status' ) ); ?></th>
+					<td><label><input type="checkbox" name="draft" value="1" <?php checked( $draft, '1' ); ?>> <?php echo esc_html( vawc_t( 'Зберігати як чернетку', 'Save as draft' ) ); ?></label></td>
+				</tr>
+				<tr>
+					<th><?php echo esc_html( vawc_t( 'Мова плагіна', 'Plugin language' ) ); ?></th>
+					<td><select name="lang">
+						<option value="auto" <?php selected( $lang, 'auto' ); ?>><?php echo esc_html( vawc_t( 'Автоматично (мова сайту)', 'Auto (site language)' ) ); ?></option>
+						<option value="uk" <?php selected( $lang, 'uk' ); ?>>Українська</option>
+						<option value="en" <?php selected( $lang, 'en' ); ?>>English</option>
+					</select>
+					<p class="description"><?php echo esc_html( vawc_t( 'Мова інтерфейсу, маяків та розпізнавання голосу.', 'Interface, beacon words and speech recognition language.' ) ); ?></p></td>
+				</tr>
+				<tr>
+					<th><?php echo esc_html( vawc_t( 'Тип користувачів з доступом', 'User roles with access' ) ); ?></th>
+					<td>
+						<?php foreach ( get_editable_roles() as $r_name => $r_info ) : ?>
+							<label style="display:block;margin-bottom:3px">
+								<input type="checkbox" name="roles[]" value="<?php echo esc_attr( $r_name ); ?>" <?php checked( in_array( $r_name, $roles, true ) ); ?> <?php disabled( 'administrator' === $r_name ); ?>>
+								<?php echo esc_html( translate_user_role( $r_info['name'] ) ); ?>
+							</label>
+						<?php endforeach; ?>
+						<p class="description"><?php echo esc_html( vawc_t( 'Ці ролі бачать плагін і можуть ним працювати. Адміністратор має доступ завжди. Роль «Менеджер плагіна» створюється автоматично при встановленні.', 'These roles can see and use the plugin. Administrators always have access. The “Plugin manager” role is created automatically on install.' ) ); ?></p>
+					</td>
+				</tr>
+			</table>
+			<p class="submit">
+				<button type="submit" name="vawc_save" value="1" class="button button-primary"><?php echo esc_html( vawc_t( 'Зберегти', 'Save' ) ); ?></button>
+			</p>
+		</form>
+
+	</div>
+	<?php
+}
+
+/* ====================================================================== */
+/* 9. ГОЛОВНА СТОРІНКА                                                     */
+/* ====================================================================== */
+add_action( 'admin_enqueue_scripts', function ( $hook ) {
+	if ( false === strpos( $hook, 'vawc_main' ) ) {
+		return;
+	}
+	wp_enqueue_style( 'vawc-app', VAWC_URL . 'assets/app.css', array(), VAWC_VERSION );
+	wp_enqueue_script( 'vawc-app', VAWC_URL . 'assets/app.js', array(), VAWC_VERSION, true );
+
+	$fields = array();
+	foreach ( vawc_fields() as $d ) {
+		$al = array( $d['ua'], $d['en'] );
+		if ( ! empty( $d['aliases'] ) ) {
+			$al = array_merge( $al, $d['aliases'] );
+		}
+		$fields[] = array(
+			'key'     => $d['key'],
+			'label'   => vawc_label( $d ),
+			'aliases' => array_values( array_unique( array_filter( array_map( 'vawc_norm', $al ) ) ) ),
+			'kind'    => $d['kind'],
+			'tpl'     => ! empty( $d['tpl'] ),
+			'join'    => isset( $d['join'] ) ? $d['join'] : ' ',
+		);
+	}
+	$S = array(
+		'mic'        => '🎤 ' . vawc_t( 'ДИКТУВАТИ', 'DICTATE' ),
+		'micStop'    => '🛑 ' . vawc_t( 'ЗУПИНИТИ', 'STOP' ),
+		'save'       => '➕ ' . ( '1' === get_option( 'vawc_draft', '1' ) ? vawc_t( 'ЗБЕРЕГТИ ЯК ЧЕРНЕТКУ', 'SAVE AS DRAFT' ) : vawc_t( 'ОПУБЛІКУВАТИ', 'PUBLISH' ) ),
+		'saving'     => '⏳ ' . vawc_t( 'Зберігаю...', 'Saving...' ),
+		'noSpeech'   => vawc_t( 'Ваш браузер не підтримує розпізнавання голосу. Використовуйте Chrome (Android/ПК) через HTTPS.', 'Your browser does not support speech recognition. Use Chrome (Android/PC) over HTTPS.' ),
+		'noCam'      => vawc_t( 'Камера недоступна. Можна додати фото з галереї.', 'Camera unavailable. You can add photos from the gallery.' ),
+		'listening'  => vawc_t( 'Слухаю…', 'Listening…' ),
+		'target'     => vawc_t( 'Диктуєте в поле', 'Dictating into' ),
+		'created'    => vawc_t( 'Створено!', 'Created!' ),
+		'edit'       => vawc_t( 'Відкрити', 'Open' ),
+		'importing'  => vawc_t( 'Імпортую…', 'Importing…' ),
+		'importDone' => vawc_t( 'Імпорт завершено', 'Import finished' ),
+		'created_n'  => vawc_t( 'створено', 'created' ),
+		'failed_n'   => vawc_t( 'помилок', 'failed' ),
+		'pickCsv'    => vawc_t( 'Виберіть CSV-файл', 'Choose a CSV file' ),
+		'netErr'     => vawc_t( 'Помилка зʼєднання', 'Connection error' ),
+		'remove'     => vawc_t( 'Натисніть, щоб видалити фото', 'Tap to remove photo' ),
+		'printTitle' => vawc_t( 'Інструкція', 'Instruction' ),
+	);
+	wp_localize_script(
+		'vawc-app',
+		'VA_CFG',
+		array(
+			'ajax'    => admin_url( 'admin-ajax.php' ),
+			'nonce'   => wp_create_nonce( 'vawc_nonce' ),
+			'actions' => array( 'save' => 'vawc_save', 'import' => 'vawc_import' ),
+			'attrNames' => array_map( function ( $a ) { return $a['label']; }, vawc_attr_defs() ),
+			'lang'    => vawc_en() ? 'en-US' : 'uk-UA',
+			'fields'  => $fields,
+			'tpl'     => vawc_template(),
+			'S'       => $S,
+		)
+	);
+} );
+
+function vawc_page_main() {
+	if ( ! current_user_can( 'vawc_use' ) ) {
+		wp_die( esc_html( vawc_t( 'Доступ заборонено', 'Access denied' ) ) );
+	}
 	$draft   = '1' === get_option( 'vawc_draft', '1' );
 	$exp_url = add_query_arg( array( 'action' => 'vawc_export', 'nonce' => wp_create_nonce( 'vawc_nonce' ) ), admin_url( 'admin-ajax.php' ) );
 	?>
 	<div class="wrap va-wrap" id="va_app">
 		<div class="va-head">
-			<h1>🎤 Voice ADD for WooCommerce <sup>v<?php echo esc_html( VAWC_VERSION ); ?></sup></h1>
+			<h1>🎤 Voice ADD for WooCommerce PRO <sup>v<?php echo esc_html( VAWC_VERSION ); ?></sup></h1>
 			<div class="va-head-btns">
 				<button type="button" class="button" id="va_go_instr">📖 <?php echo esc_html( vawc_t( 'Інструкція', 'Instructions' ) ); ?></button>
 				<?php if ( current_user_can( 'manage_options' ) ) : ?>
@@ -378,7 +492,7 @@ function vawc_page_settings() {
 }
 
 /* ====================================================================== */
-/* 10. ІНСТРУКЦІЇ (поля WooCommerce)               */
+/* 10. ІНСТРУКЦІЇ (поля підтягуються з магазину / WooCommerce)               */
 /* ====================================================================== */
 function vawc_instr_open( $id, $title ) {
 	echo '<section class="va-instr" id="' . esc_attr( $id ) . '"><div class="va-instr-head"><h3>' . esc_html( $title ) . '</h3>';
@@ -497,7 +611,7 @@ function vawc_import_csv_text( $content ) {
 		return new WP_Error( 'cols', vawc_t( 'Не знайдено відомих колонок. Завантажте шаблон CSV.', 'No known columns found. Download the CSV template.' ) );
 	}
 	$created = 0; $failed = 0; $errors = array(); $rows = 0;
-	while ( ( $row = fgetcsv( $fh, 0, $delim ) ) !== false ) {
+	while ( ( $row = fgetcsv( $fh, 0, $delim ) ) !== false && $rows < 500 ) {
 		if ( 1 === count( $row ) && '' === trim( (string) $row[0] ) ) {
 			continue;
 		}
