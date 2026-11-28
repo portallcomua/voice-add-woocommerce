@@ -240,11 +240,11 @@ function vawc_save_images( $pid, $imgs ) {
 			continue;
 		}
 		$bin = base64_decode( substr( $b64, $p + 7 ), true );
-		if ( ! $bin ) {
+		if ( false === $bin || strlen( $bin ) > 10 * MB_IN_BYTES ) {
 			continue;
 		}
-		$info = @getimagesizefromstring( $bin );
-		if ( ! $info || ! isset( $map[ $info[2] ] ) ) {
+		$info = getimagesizefromstring( $bin );
+		if ( ! is_array( $info ) || empty( $info[0] ) || empty( $info[1] ) || empty( $info[2] ) || ! isset( $map[ $info[2] ] ) || ( $info[0] * $info[1] ) > 25000000 ) {
 			continue;
 		}
 		$up = wp_upload_bits( 'vawc_' . (int) $pid . '_' . time() . '_' . (int) $i . '.' . $map[ $info[2] ][0], null, $bin );
@@ -272,7 +272,7 @@ function vawc_sideload_images( $pid, $urls ) {
 	$ids = array();
 	foreach ( array_slice( (array) $urls, 0, 10 ) as $url ) {
 		$url = esc_url_raw( trim( $url ) );
-		if ( ! $url ) {
+		if ( ! $url || ! wp_http_validate_url( $url ) ) {
 			continue;
 		}
 		$id = media_sideload_image( $url, $pid, null, 'id' );
