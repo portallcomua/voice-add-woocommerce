@@ -438,7 +438,7 @@ function vawc_page_main() {
 	?>
 	<div class="wrap va-wrap" id="va_app">
 		<div class="va-head">
-			<h1>🎤 Voice ADD for WooCommerce PRO <sup>v<?php echo esc_html( VAWC_VERSION ); ?></sup></h1>
+			<h1>🎤 Voice ADD for WooCommerce <sup>v<?php echo esc_html( VAWC_VERSION ); ?></sup></h1>
 			<div class="va-head-btns">
 				<button type="button" class="button" id="va_go_instr">📖 <?php echo esc_html( vawc_t( 'Інструкція', 'Instructions' ) ); ?></button>
 				<?php if ( current_user_can( 'manage_options' ) ) : ?>
@@ -612,7 +612,7 @@ function vawc_import_csv_text( $content ) {
 		return new WP_Error( 'cols', vawc_t( 'Не знайдено відомих колонок. Завантажте шаблон CSV.', 'No known columns found. Download the CSV template.' ) );
 	}
 	$created = 0; $failed = 0; $errors = array(); $rows = 0;
-	while ( ( $row = fgetcsv( $fh, 0, $delim ) ) !== false && $rows < 500 ) {
+	while ( ( $row = fgetcsv( $fh, 0, $delim ) ) !== false ) {
 		if ( 1 === count( $row ) && '' === trim( (string) $row[0] ) ) {
 			continue;
 		}
