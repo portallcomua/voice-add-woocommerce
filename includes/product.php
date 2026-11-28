@@ -207,7 +207,8 @@ function vawc_csv_export_rows( $cols ) {
 /** Транслітерація назви в латинський slug (для slug атрибута WooCommerce). */
 function vawc_slug( $s ) {
 	$map = array( 'а' => 'a', 'б' => 'b', 'в' => 'v', 'г' => 'h', 'ґ' => 'g', 'д' => 'd', 'е' => 'e', 'є' => 'ye', 'ж' => 'zh', 'з' => 'z', 'и' => 'y', 'і' => 'i', 'ї' => 'yi', 'й' => 'y', 'к' => 'k', 'л' => 'l', 'м' => 'm', 'н' => 'n', 'о' => 'o', 'п' => 'p', 'р' => 'r', 'с' => 's', 'т' => 't', 'у' => 'u', 'ф' => 'f', 'х' => 'kh', 'ц' => 'ts', 'ч' => 'ch', 'ш' => 'sh', 'щ' => 'shch', 'ь' => '', 'ю' => 'yu', 'я' => 'ya', 'ы' => 'y', 'э' => 'e', 'ё' => 'yo', 'ъ' => '' );
-	$s   = strtr( mb_strtolower( (string) $s, 'UTF-8' ), $map );
+	$lower = function_exists( 'mb_strtolower' ) ? mb_strtolower( (string) $s, 'UTF-8' ) : strtolower( (string) $s );
+	$s   = strtr( $lower, $map );
 	$s   = sanitize_title( $s );
 	return substr( $s, 0, 20 );
 }
