@@ -300,11 +300,32 @@
 	/* ---------- Фото ---------- */
 	var cam = $('va_cam'), gal = $('va_gal');
 
-	if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-		navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-			.then(function (s) { cam.srcObject = s; })
-			.catch(function () { cam.style.display = 'none'; });
-	} else { cam.style.display = 'none'; }
+	cam.style.display = 'none';
+
+	function openCamera() {
+		if ( cam.srcObject ) {
+			return;
+		}
+		if ( ! navigator.mediaDevices || ! navigator.mediaDevices.getUserMedia ) {
+			say( msg, S.noCam, 'is-err' );
+			$('va_files').click();
+			return;
+		}
+		navigator.mediaDevices.getUserMedia( { video: { facingMode: 'environment' } } )
+			.then( function ( stream ) {
+				cam.srcObject = stream;
+				cam.style.display = 'block';
+				cam.onloadedmetadata = function () {
+					cam.play();
+					say( msg, '📷 ' + S.cameraReady );
+				};
+			} )
+			.catch( function () {
+				cam.style.display = 'none';
+				say( msg, S.noCam, 'is-err' );
+				$('va_files').click();
+			} );
+	}
 
 	function shrink(source, w, h, cb) {
 		var max = 1600, k = Math.min(1, max / Math.max(w, h));
@@ -327,8 +348,11 @@
 	}
 
 	$('va_photo').addEventListener('click', function () {
-		if (cam.videoWidth) { shrink(cam, cam.videoWidth, cam.videoHeight, addPhoto); }
-		else { $('va_files').click(); }
+		if ( cam.videoWidth ) {
+			shrink( cam, cam.videoWidth, cam.videoHeight, addPhoto );
+		} else {
+			openCamera();
+		}
 	});
 	$('va_file').addEventListener('click', function () { $('va_files').click(); });
 	$('va_files').addEventListener('change', function () {
