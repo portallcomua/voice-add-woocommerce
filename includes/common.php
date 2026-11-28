@@ -497,7 +497,7 @@ function vawc_import_csv_text( $content ) {
 		return new WP_Error( 'cols', vawc_t( 'Не знайдено відомих колонок. Завантажте шаблон CSV.', 'No known columns found. Download the CSV template.' ) );
 	}
 	$created = 0; $failed = 0; $errors = array(); $rows = 0;
-	while ( ( $row = fgetcsv( $fh, 0, $delim ) ) !== false && $rows < 500 ) {
+	while ( ( $row = fgetcsv( $fh, 0, $delim ) ) !== false ) {
 		if ( 1 === count( $row ) && '' === trim( (string) $row[0] ) ) {
 			continue;
 		}
