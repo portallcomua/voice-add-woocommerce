@@ -70,7 +70,7 @@ Email: support@uaserver.pp.ua
 
 == External services ==
 
-This plugin does not contact UAServer, Freemius, UA Pay Box, GitHub or any licensing server during normal operation.
+The plugin does not contact the developer's servers or any licensing server during normal operation.
 
 Browser speech recognition:
 * What it is: The browser's built-in Web Speech API or equivalent speech recognition implementation.
