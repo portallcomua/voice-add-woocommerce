@@ -8,6 +8,7 @@ on:
       - "voice-add-woocommerce.php"
       - "**/*.php"
       - "assets/*.js"
+      - "readme.txt"
       - ".github/workflows/auto-release.yml"
 
 permissions:
