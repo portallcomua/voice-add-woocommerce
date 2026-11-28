@@ -25,7 +25,7 @@
 	aliasList.sort(function (a, b) { return b.tokens.length - a.tokens.length || b.tokens.join('').length - a.tokens.join('').length; });
 	var attrDef = null;
 	defs.forEach(function (d) { if (d.kind === 'attr') { attrDef = d; } });
-	// Атрибути магазину / HivePress також розпізнаються за назвою («Колір червоний»)
+	// Store attributes are also recognized by name (for example, “Color red”).
 	var attrNameList = (C.attrNames || []).map(function (n) { return { name: n, tokens: norm(n).split(' ') }; })
 		.filter(function (a) { return a.tokens[0]; })
 		.sort(function (a, b) { return b.tokens.length - a.tokens.length; });
@@ -313,12 +313,12 @@
 		}
 		navigator.mediaDevices.getUserMedia( { video: { facingMode: 'environment' } } )
 			.then( function ( stream ) {
-				cam.srcObject = stream;
-				cam.style.display = 'block';
 				cam.onloadedmetadata = function () {
 					cam.play();
 					say( msg, '📷 ' + S.cameraReady );
 				};
+				cam.srcObject = stream;
+				cam.style.display = 'block';
 			} )
 			.catch( function () {
 				cam.style.display = 'none';
