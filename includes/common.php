@@ -1,8 +1,7 @@
 <?php
 /**
  * Спільне ядро Voice ADD (Voice ADD for WooCommerce PRO).
- * Мова, роль, права, інтеграція з Pay Box, оновлення з GitHub, налаштування,
- * головна сторінка, інструкції, збереження.
+ * Language, roles, permissions, settings, product creation and CSV tools.
  */
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
@@ -23,347 +22,51 @@ function vawc_en() { return 'en' === vawc_lang(); }
 function vawc_t( $ua, $en ) { return vawc_en() ? $en : $ua; }
 
 function vawc_norm( $s ) {
-	$s = mb_strtolower( (string) $s, 'UTF-8' );
+	$s = function_exists( 'mb_strtolower' ) ? mb_strtolower( (string) $s, 'UTF-8' ) : strtolower( (string) $s );
 	$s = preg_replace( '/[^\p{L}\p{N}]+/u', ' ', $s );
 	return trim( $s );
 }
 
 /* ====================================================================== */
-/* 2. АВТООНОВЛЕННЯ З GITHUB                                               */
+/* 2. ІНФОРМАЦІЯ ПРО РОЗШИРЕНУ ВЕРСІЮ                                    */
 /* ====================================================================== */
-class VAWC_Updater {
-	private $basename, $slug, $repo, $version;
-
-	public function __construct( $file, $repo, $version ) {
-		$this->basename = plugin_basename( $file );
-		$this->slug     = dirname( $this->basename );
-		$this->repo     = $repo;
-		$this->version  = $version;
-		add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'check' ) );
-		add_filter( 'plugins_api', array( $this, 'info' ), 10, 3 );
-		add_filter( 'upgrader_source_selection', array( $this, 'fix_dir' ), 10, 4 );
-	}
-
-	private function key() { return 'vawc_gh_' . md5( $this->repo ); }
-
-	private $last_error = '';
-
-	public function last_error() { return $this->last_error; }
-
-	public function flush() {
-		delete_transient( $this->key() );
-		$this->last_error = '';
-	}
-
-	public function remote() {
-		$this->last_error = '';
-		$cached = get_transient( $this->key() );
-		if ( false !== $cached ) {
-			return $cached ? $cached : null;
-		}
-
-		$api_error = '';
-		$api = wp_remote_get(
-			'https://api.github.com/repos/' . $this->repo . '/releases/latest',
-			array(
-				'timeout'     => 15,
-				'redirection' => 3,
-				'headers'     => array(
-					'Accept'     => 'application/vnd.github+json',
-					'User-Agent' => 'Voice-ADD-WordPress-Updater',
-				),
-			)
-		);
-
-		if ( is_wp_error( $api ) ) {
-			$api_error = $api->get_error_message();
-		} else {
-			$api_code = (int) wp_remote_retrieve_response_code( $api );
-			$api_data = 200 === $api_code ? json_decode( wp_remote_retrieve_body( $api ) ) : null;
-			if ( $api_data && ! empty( $api_data->tag_name ) ) {
-				$zip = ! empty( $api_data->zipball_url ) ? $api_data->zipball_url : '';
-				if ( ! empty( $api_data->assets ) ) {
-					foreach ( $api_data->assets as $asset ) {
-						if ( isset( $asset->name, $asset->browser_download_url ) && preg_match( '/\\.zip$/i', $asset->name ) ) {
-							$zip = $asset->browser_download_url;
-							if ( $asset->name === $this->slug . '.zip' ) {
-								break;
-							}
-						}
-					}
-				}
-				if ( $zip ) {
-					$out = (object) array(
-						'version' => ltrim( $api_data->tag_name, 'vV' ),
-						'zip'     => esc_url_raw( $zip ),
-						'url'     => ! empty( $api_data->html_url ) ? esc_url_raw( $api_data->html_url ) : '',
-					);
-					set_transient( $this->key(), $out, 10 * MINUTE_IN_SECONDS );
-					return $out;
-				}
-				$api_error = 'GitHub API не повернув ZIP-архів релізу.';
-			} else {
-				$api_json = 200 === $api_code ? json_decode( wp_remote_retrieve_body( $api ) ) : null;
-				$api_error = ( $api_json && ! empty( $api_json->message ) )
-					? 'GitHub API HTTP ' . $api_code . ': ' . sanitize_text_field( $api_json->message )
-					: 'GitHub API HTTP ' . $api_code;
-			}
-		}
-
-		/*
-		 * Резервний спосіб не використовує GitHub REST API.
-		 * Він потрібен, коли спільний IP хостингу вичерпав ліміт запитів api.github.com.
-		 */
-		$page = wp_remote_get(
-			'https://github.com/' . $this->repo . '/releases/latest',
-			array(
-				'timeout'     => 20,
-				'redirection' => 5,
-				'headers'     => array(
-					'Accept'     => 'text/html',
-					'User-Agent' => 'Mozilla/5.0 (compatible; Voice-ADD-WordPress-Updater/1.0)',
-				),
-			)
-		);
-		if ( is_wp_error( $page ) ) {
-			$this->last_error = trim( $api_error . '; GitHub releases page: ' . $page->get_error_message(), '; ' );
-			return null;
-		}
-		$page_code = (int) wp_remote_retrieve_response_code( $page );
-		$page_body = wp_remote_retrieve_body( $page );
-		if ( 200 !== $page_code || ! is_string( $page_body ) || '' === $page_body ) {
-			$this->last_error = trim( $api_error . '; GitHub releases page HTTP ' . $page_code, '; ' );
-			return null;
-		}
-
-		$repo_path = preg_quote( $this->repo, '~' );
-		if ( ! preg_match( '~/' . $repo_path . '/releases/tag/([^"?#/<>]+)~i', $page_body, $match ) ) {
-			$this->last_error = trim( $api_error . '; Не вдалося визначити тег останнього релізу на сторінці GitHub.', '; ' );
-			return null;
-		}
-		$tag = rawurldecode( html_entity_decode( $match[1], ENT_QUOTES, 'UTF-8' ) );
-		$version = ltrim( $tag, 'vV' );
-		if ( ! preg_match( '/^\\d+\\.\\d+\\.\\d+$/', $version ) ) {
-			$this->last_error = 'GitHub повернув некоректний тег релізу: ' . sanitize_text_field( $tag );
-			return null;
-		}
-
-		$out = (object) array(
-			'version' => $version,
-			'zip'     => esc_url_raw( 'https://github.com/' . $this->repo . '/archive/refs/tags/' . rawurlencode( $tag ) . '.zip' ),
-			'url'     => esc_url_raw( 'https://github.com/' . $this->repo . '/releases/tag/' . rawurlencode( $tag ) ),
-		);
-		set_transient( $this->key(), $out, 10 * MINUTE_IN_SECONDS );
-		return $out;
-	}
-
-	public function check( $t ) {
-		if ( ! is_object( $t ) ) {
-			return $t;
-		}
-		if ( ! isset( $t->response ) || ! is_array( $t->response ) ) {
-			$t->response = array();
-		}
-		if ( ! isset( $t->no_update ) || ! is_array( $t->no_update ) ) {
-			$t->no_update = array();
-		}
-		$r = $this->remote();
-		if ( $r && ! empty( $r->zip ) && version_compare( $this->version, $r->version, '<' ) ) {
-			$t->response[ $this->basename ] = (object) array(
-				'slug'        => $this->slug,
-				'plugin'      => $this->basename,
-				'new_version' => $r->version,
-				'package'     => $r->zip,
-				'url'         => $r->url,
-			);
-			unset( $t->no_update[ $this->basename ] );
-		}
-		return $t;
-	}
-
-	public function info( $res, $action, $args ) {
-		if ( 'plugin_information' !== $action || empty( $args->slug ) || $args->slug !== $this->slug ) {
-			return $res;
-		}
-		$r = $this->remote();
-		if ( ! $r ) {
-			return $res;
-		}
-		return (object) array(
-			'name'          => 'Voice ADD for WooCommerce PRO',
-			'slug'          => $this->slug,
-			'version'       => $r->version,
-			'download_link' => $r->zip,
-			'requires_php'  => '7.4',
-			'sections'      => array(
-				'description' => 'Голосове додавання товарів у WooCommerce з фото, прибиранням фону, атрибутами та варіаціями.',
-			),
-		);
-	}
-
-	public function fix_dir( $source, $remote_source, $upgrader, $hook_extra ) {
-		if ( empty( $hook_extra['plugin'] ) || $hook_extra['plugin'] !== $this->basename ) {
-			return $source;
-		}
-		global $wp_filesystem;
-		$new = trailingslashit( $remote_source ) . $this->slug . '/';
-		if ( untrailingslashit( $source ) === untrailingslashit( $new ) ) {
-			return $source;
-		}
-		if ( $wp_filesystem && $wp_filesystem->move( $source, $new, true ) ) {
-			return $new;
-		}
-		return $source;
-	}
-
+function vawc_pro_url() {
+	return 'https://uaserver.pp.ua/voice-add-woocommerce-pro/';
 }
-
-function vawc_updater() {
-	static $u = null;
-	if ( null === $u ) {
-		$u = new VAWC_Updater( VAWC_FILE, VAWC_GITHUB, VAWC_VERSION );
-	}
-	return $u;
+function vawc_pro_promo_html() {
+	$url = vawc_pro_url();
+	return '<section class="va-pro-card" aria-label="' . esc_attr( vawc_t( 'Розширена версія', 'Extended version' ) ) . '">' .
+		'<div class="va-pro-card__top"><strong>Voice ADD PRO</strong></div>' .
+		'<p>' . esc_html( vawc_t( 'Потрібні додаткові можливості? Існує розширена версія PRO. Перегляньте її опис та умови окремо.', 'Need additional capabilities? An extended PRO edition is available. Review its features and terms separately.' ) ) . '</p>' .
+		'<a class="button" href="' . esc_url( $url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( vawc_t( 'Дізнатися про PRO', 'Learn about PRO' ) ) . '</a>' .
+		'</section>';
 }
-vawc_updater();
-
 /* ====================================================================== */
-/* 3. PRO ЧЕРЕЗ FREEMIUS                                                   */
+/* 3. РОЛЬ, ПРАВА, АКТИВАЦІЯ                                               */
 /* ====================================================================== */
-function vawc_paybox_url() { return untrailingslashit( VAWC_HUB ); }
-
-/** Пряме посилання на Freemius Checkout (product 46141, plan 81250). */
-function vawc_checkout_url() {
-	$url = 'https://checkout.freemius.com/product/46141/plan/81250/';
-	return esc_url( add_query_arg( array(
-		'user_email' => sanitize_email( get_option( 'admin_email' ) ),
-		'readonly_user' => 'true',
-		'cancel_url' => admin_url( 'admin.php?page=vawc_main' ),
-	), $url ) );
-}
-
-/**
- * Freemius: базова ціна — 33 USD.
- * Англомовний інтерфейс показує USD; україномовний — еквівалент у гривні
- * за офіційним курсом НБУ. UA Pay Box не бере участі у формуванні ціни.
- */
-function vawc_pro_price() {
-	if ( vawc_en() ) {
-		return '$33';
-	}
-
-	$rate = get_transient( 'vawc_freemius_usd_nbu_rate' );
-	if ( false === $rate || ! is_numeric( $rate ) || (float) $rate <= 0 ) {
-		$response = wp_remote_get(
-			'https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?valcode=USD&json',
-			array(
-				'timeout'     => 10,
-				'redirection' => 2,
-				'headers'     => array( 'Accept' => 'application/json' ),
-			)
-		);
-		if ( ! is_wp_error( $response ) && 200 === (int) wp_remote_retrieve_response_code( $response ) ) {
-			$data = json_decode( wp_remote_retrieve_body( $response ), true );
-			if ( is_array( $data ) && ! empty( $data[0]['rate'] ) && is_numeric( $data[0]['rate'] ) ) {
-				$rate = (float) $data[0]['rate'];
-				set_transient( 'vawc_freemius_usd_nbu_rate', $rate, 12 * HOUR_IN_SECONDS );
-			}
-		}
-	}
-
-	if ( is_numeric( $rate ) && (float) $rate > 0 ) {
-		return number_format_i18n( (int) round( 33 * (float) $rate ), 0 ) . ' грн';
-	}
-
-	// Не підміняємо ціну старим значенням з UA Pay Box, якщо НБУ тимчасово недоступний.
-	return '33 USD';
-}
-
-/** Перевірка покупки через email у центральному Pay Box; ключ вводити не потрібно. */
-function vawc_pro_state( $force = false ) {
-	$email = sanitize_email( get_option( 'admin_email' ) );
-	$cache = get_option( 'vawc_freemius_pro', array() );
-	$cache = is_array( $cache ) ? $cache : array();
-	$checked = isset( $cache['checked'] ) ? (int) $cache['checked'] : 0;
-	$same_email = isset( $cache['email'] ) && strtolower( $cache['email'] ) === strtolower( $email );
-	$verified_live = $same_email && ! empty( $cache['verified_live'] );
-	$valid_cached = $verified_live && isset( $cache['state'] ) && 'active' === $cache['state'];
-
-	// Старий кеш PRO не вважаємо підтвердженням: він міг бути створений Sandbox-покупкою.
-	if ( ! $force && $verified_live && $checked && ( time() - $checked ) < 5 * MINUTE_IN_SECONDS ) {
-		return $cache;
-	}
-	if ( ! $email || ! is_email( $email ) ) {
-		return array( 'state' => 'free', 'expires' => 0, 'checked' => time(), 'email' => $email, 'verified_live' => false );
-	}
-
-	$response = wp_remote_post( vawc_paybox_url() . '/wp-json/upb/v1/license/status', array(
-		'timeout' => 12,
-		'redirection' => 2,
-		'headers' => array( 'Accept' => 'application/json' ),
-		'body' => array( 'service' => 'voice-add-woocommerce', 'email' => $email ),
-	) );
-
-	if ( is_wp_error( $response ) ) {
-		return $valid_cached && $checked && ( time() - $checked ) <= 7 * DAY_IN_SECONDS
-			? $cache
-			: array( 'state' => 'free', 'expires' => 0, 'checked' => $checked, 'email' => $email, 'verified_live' => false );
-	}
-	$code = (int) wp_remote_retrieve_response_code( $response );
-	$data = json_decode( wp_remote_retrieve_body( $response ), true );
-	if ( 200 !== $code || ! is_array( $data ) || ! array_key_exists( 'valid', $data ) || ! array_key_exists( 'environment', $data ) ) {
-		return $valid_cached && $checked && ( time() - $checked ) <= 7 * DAY_IN_SECONDS
-			? $cache
-			: array( 'state' => 'free', 'expires' => 0, 'checked' => $checked, 'email' => $email, 'verified_live' => false );
-	}
-
-	$environment = isset( $data['environment'] ) ? strtolower( trim( (string) $data['environment'] ) ) : '';
-	$is_live = ( 0 === $data['environment'] || '0' === $environment || in_array( $environment, array( 'production', 'live' ), true ) );
-	$valid = in_array( $data['valid'], array( true, 1, '1', 'true', 'yes' ), true );
-	$active = $valid && $is_live;
-	$state = array(
-		'state' => $active ? 'active' : 'free',
-		'expires' => isset( $data['expires'] ) ? absint( $data['expires'] ) : 0,
-		'checked' => time(),
-		'email' => $email,
-		'status' => isset( $data['status'] ) ? sanitize_key( $data['status'] ) : 'unknown',
-		'environment' => $is_live ? 'production' : 'sandbox_or_unverified',
-		'verified_live' => true,
-	);
-	update_option( 'vawc_freemius_pro', $state, false );
-	return $state;
-}
-function vawc_is_pro() {
-	$c = vawc_pro_state();
-	return isset( $c['state'] ) && 'active' === $c['state'] && ( empty( $c['expires'] ) || (int) $c['expires'] > time() );
-}
-function vawc_buy_button( $label = '' ) {
-	$url = vawc_checkout_url();
-	if ( ! $url ) return '<span class="button va-buy-disabled">' . esc_html( vawc_t( 'Оплата тимчасово недоступна', 'Checkout temporarily unavailable' ) ) . '</span>';
-	return '<a class="button button-primary va-buy" href="' . esc_url( $url ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $label ? $label : vawc_t( 'Придбати PRO', 'Buy PRO' ) ) . '</a>';
-}
-
-/* Безкоштовний ліміт — 25 успішно створених товарів на користувача. */
-function vawc_limit() { return (int) apply_filters( 'vawc_free_limit', VAWC_FREE_LIMIT ); }
-function vawc_count() { return (int) get_user_meta( get_current_user_id(), 'vawc_ops', true ); }
-function vawc_inc( $n = 1 ) { update_user_meta( get_current_user_id(), 'vawc_ops', vawc_count() + (int) $n ); }
-function vawc_remaining() { return max( 0, vawc_limit() - vawc_count() ); }
-function vawc_can_create( $n = 1 ) { return vawc_is_pro() || vawc_count() + (int) $n <= vawc_limit(); }
-
 /* ====================================================================== */
 /* 4. РОЛЬ, ПРАВА, АКТИВАЦІЯ                                               */
 /* ====================================================================== */
 function vawc_setup() {
-	if ( get_role( 'vawc_manager' ) ) {
-		remove_role( 'vawc_manager' );
+	$capabilities = vawc_role_caps();
+	$role = get_role( 'vawc_manager' );
+	if ( ! $role ) {
+		add_role( 'vawc_manager', 'Voice ADD Manager', $capabilities );
+		$role = get_role( 'vawc_manager' );
 	}
-	add_role( 'vawc_manager', 'Менеджер плагіна voice-add-woocommerce', vawc_role_caps() );
+	if ( $role ) {
+		foreach ( $capabilities as $capability => $grant ) {
+			if ( $grant ) {
+				$role->add_cap( $capability );
+			}
+		}
+	}
 	add_option( 'vawc_draft', '1' );
-	add_option( 'vawc_rbg_api', '' );
 	add_option( 'vawc_lang', 'auto' );
 	add_option( 'vawc_allowed_roles', array( 'administrator', 'vawc_manager' ) );
 	update_option( 'vawc_ver', VAWC_VERSION );
 }
+
 add_action( 'admin_init', function () {
 	if ( get_option( 'vawc_ver' ) !== VAWC_VERSION ) {
 		vawc_setup();
@@ -584,7 +287,7 @@ function vawc_sideload_images( $pid, $urls ) {
 /* 7. МЕНЮ                                                                 */
 /* ====================================================================== */
 add_action( 'admin_menu', function () {
-	add_menu_page( 'Voice ADD for WooCommerce PRO', 'Voice ADD WC', 'vawc_use', 'vawc_main', 'vawc_page_main', 'dashicons-microphone', 30 );
+	add_menu_page( 'Voice ADD for WooCommerce', 'Voice ADD WC', 'vawc_use', 'vawc_main', 'vawc_page_main', 'dashicons-microphone', 30 );
 	add_submenu_page( 'vawc_main', vawc_t( 'Додавання голосом', 'Voice add' ), '🎤 ' . vawc_t( 'Додавання голосом', 'Voice add' ), 'vawc_use', 'vawc_main', 'vawc_page_main' );
 	add_submenu_page( 'vawc_main', vawc_t( 'Налаштування', 'Settings' ), '⚙️ ' . vawc_t( 'Налаштування', 'Settings' ), 'manage_options', 'vawc_settings', 'vawc_page_settings' );
 }, 20 );
@@ -603,9 +306,7 @@ function vawc_page_settings() {
 	}
 	$msg = '';
 	if ( isset( $_POST['vawc_save'] ) && check_admin_referer( 'vawc_cfg' ) ) {
-		update_option( 'vawc_rbg_api', sanitize_text_field( wp_unslash( isset( $_POST['rbg_api'] ) ? $_POST['rbg_api'] : '' ) ) );
 		update_option( 'vawc_draft', isset( $_POST['draft'] ) ? '1' : '0' );
-		vawc_pro_state( true );
 		$lang = isset( $_POST['lang'] ) ? sanitize_key( $_POST['lang'] ) : 'auto';
 		update_option( 'vawc_lang', in_array( $lang, array( 'auto', 'uk', 'en' ), true ) ? $lang : 'auto' );
 		$valid = array_keys( get_editable_roles() );
@@ -617,153 +318,7 @@ function vawc_page_settings() {
 		update_option( 'vawc_allowed_roles', $roles );
 		$msg = '<div class="notice notice-success is-dismissible"><p>✅ ' . esc_html( vawc_t( 'Збережено!', 'Saved!' ) ) . '</p></div>';
 	}
-	if ( isset( $_POST['vawc_pro_refresh'] ) && check_admin_referer( 'vawc_cfg' ) ) {
-		vawc_pro_state( true );
-		$msg = '<div class="notice notice-success is-dismissible"><p>✅ ' . esc_html( vawc_t( 'Статус PRO оновлено.', 'PRO status refreshed.' ) ) . '</p></div>';
-	}
-	if ( isset( $_POST['vawc_check_update'] ) && check_admin_referer( 'vawc_cfg' ) ) {
-		vawc_updater()->flush();
-		delete_site_transient( 'update_plugins' );
-		wp_update_plugins();
-		$r = vawc_updater()->remote();
-		if ( ! $r ) {
-			$error = vawc_updater()->last_error();
-			$msg = '<div class="notice notice-error is-dismissible"><p><strong>' . esc_html( vawc_t( 'Не вдалося перевірити GitHub:', 'GitHub check failed:' ) ) . '</strong> ' . esc_html( $error ? $error : vawc_t( 'Невідома помилка. Перевірте доступ сервера до api.github.com.', 'Unknown error. Check server access to api.github.com.' ) ) . '</p></div>';
-		} elseif ( version_compare( VAWC_VERSION, $r->version, '<' ) ) {
-			$msg = '<div class="notice notice-info is-dismissible"><p>' . sprintf( esc_html( vawc_t( 'GitHub доступний. Знайдено версію %1$s (встановлено %2$s). Перейдіть на сторінку «Плагіни» та натисніть «Оновити».', 'GitHub is reachable. Version %1$s found (installed %2$s). Open Plugins and click Update.' ) ), '<strong>' . esc_html( $r->version ) . '</strong>', '<strong>' . esc_html( VAWC_VERSION ) . '</strong>' ) . '</p></div>';
-		} else {
-			$msg = '<div class="notice notice-success is-dismissible"><p>' . sprintf( esc_html( vawc_t( 'Перевірку завершено. Встановлена версія: %1$s. Останній реліз GitHub: %2$s. Оновлення не потрібне.', 'Check complete. Installed version: %1$s. Latest GitHub release: %2$s. No update is needed.' ) ), '<strong>' . esc_html( VAWC_VERSION ) . '</strong>', '<strong>' . esc_html( $r->version ) . '</strong>' ) . '</p></div>';
-		}
-	}
-
-	$rbg   = get_option( 'vawc_rbg_api', '' );
-	$draft = get_option( 'vawc_draft', '1' );
-	$roles = (array) get_option( 'vawc_allowed_roles', array( 'administrator', 'vawc_manager' ) );
-	$lang  = get_option( 'vawc_lang', 'auto' );
-	?>
-	<div class="wrap">
-		<h1>
-			⚙️ Voice ADD for WooCommerce PRO
-			<span style="font-size:14px;color:#666;font-weight:400">v<?php echo esc_html( VAWC_VERSION ); ?></span>
-			<a href="<?php echo esc_url( admin_url( 'admin.php?page=vawc_main' ) ); ?>" class="page-title-action">🎤 <?php echo esc_html( vawc_t( 'Перейти на плагін', 'Go to plugin' ) ); ?></a>
-		</h1>
-		<?php echo $msg; // phpcs:ignore ?>
-
-		<form method="post"><?php wp_nonce_field( 'vawc_cfg' ); ?>
-			<table class="form-table" role="presentation">
-				<tr>
-					<th><label>Remove.bg API Key</label></th>
-					<td><input type="text" name="rbg_api" value="<?php echo esc_attr( $rbg ); ?>" class="regular-text code" autocomplete="off">
-					<p class="description"><?php echo esc_html( vawc_t( 'Для прибирання фону на фото. Ключ: remove.bg/api. Без ключа вибір фону вимкнено.', 'For background removal on photos. Get a key at remove.bg/api. Without a key the background picker is disabled.' ) ); ?></p></td>
-				</tr>
-				<tr>
-					<th><?php echo esc_html( vawc_t( 'Статус нового запису', 'New item status' ) ); ?></th>
-					<td><label><input type="checkbox" name="draft" value="1" <?php checked( $draft, '1' ); ?>> <?php echo esc_html( vawc_t( 'Зберігати як чернетку', 'Save as draft' ) ); ?></label></td>
-				</tr>
-				<tr>
-					<th><?php echo esc_html( vawc_t( 'Мова плагіна', 'Plugin language' ) ); ?></th>
-					<td><select name="lang">
-						<option value="auto" <?php selected( $lang, 'auto' ); ?>><?php echo esc_html( vawc_t( 'Автоматично (мова сайту)', 'Auto (site language)' ) ); ?></option>
-						<option value="uk" <?php selected( $lang, 'uk' ); ?>>Українська</option>
-						<option value="en" <?php selected( $lang, 'en' ); ?>>English</option>
-					</select>
-					<p class="description"><?php echo esc_html( vawc_t( 'Мова інтерфейсу, маяків та розпізнавання голосу.', 'Interface, beacon words and speech recognition language.' ) ); ?></p></td>
-				</tr>
-				<tr>
-					<th><?php echo esc_html( vawc_t( 'Тип користувачів з доступом', 'User roles with access' ) ); ?></th>
-					<td>
-						<?php foreach ( get_editable_roles() as $r_name => $r_info ) : ?>
-							<label style="display:block;margin-bottom:3px">
-								<input type="checkbox" name="roles[]" value="<?php echo esc_attr( $r_name ); ?>" <?php checked( in_array( $r_name, $roles, true ) ); ?> <?php disabled( 'administrator' === $r_name ); ?>>
-								<?php echo esc_html( translate_user_role( $r_info['name'] ) ); ?>
-							</label>
-						<?php endforeach; ?>
-						<p class="description"><?php echo esc_html( vawc_t( 'Ці ролі бачать плагін і можуть ним працювати. Адміністратор має доступ завжди. Роль «Менеджер плагіна» створюється автоматично при встановленні.', 'These roles can see and use the plugin. Administrators always have access. The “Plugin manager” role is created automatically on install.' ) ); ?></p>
-					</td>
-				</tr>
-			</table>
-			<p class="submit">
-				<button type="submit" name="vawc_save" value="1" class="button button-primary"><?php echo esc_html( vawc_t( 'Зберегти', 'Save' ) ); ?></button>
-				<button type="submit" name="vawc_check_update" value="1" class="button"><?php echo esc_html( vawc_t( 'Перевірити оновлення (GitHub)', 'Check for updates (GitHub)' ) ); ?></button>
-			</p>
-		</form>
-
-	</div>
-	<?php
-}
-
-/* ====================================================================== */
-/* 9. ГОЛОВНА СТОРІНКА                                                     */
-/* ====================================================================== */
-add_action( 'admin_enqueue_scripts', function ( $hook ) {
-	if ( false === strpos( $hook, 'vawc_main' ) ) {
-		return;
-	}
-	wp_enqueue_style( 'vawc-app', VAWC_URL . 'assets/app.css', array(), VAWC_VERSION );
-	wp_enqueue_script( 'vawc-app', VAWC_URL . 'assets/app.js', array(), VAWC_VERSION, true );
-
-	$fields = array();
-	foreach ( vawc_fields() as $d ) {
-		$al = array( $d['ua'], $d['en'] );
-		if ( ! empty( $d['aliases'] ) ) {
-			$al = array_merge( $al, $d['aliases'] );
-		}
-		$fields[] = array(
-			'key'     => $d['key'],
-			'label'   => vawc_label( $d ),
-			'aliases' => array_values( array_unique( array_filter( array_map( 'vawc_norm', $al ) ) ) ),
-			'kind'    => $d['kind'],
-			'tpl'     => ! empty( $d['tpl'] ),
-			'join'    => isset( $d['join'] ) ? $d['join'] : ' ',
-		);
-	}
-	$S = array(
-		'mic'        => '🎤 ' . vawc_t( 'ДИКТУВАТИ', 'DICTATE' ),
-		'micStop'    => '🛑 ' . vawc_t( 'ЗУПИНИТИ', 'STOP' ),
-		'save'       => '➕ ' . ( '1' === get_option( 'vawc_draft', '1' ) ? vawc_t( 'ЗБЕРЕГТИ ЯК ЧЕРНЕТКУ', 'SAVE AS DRAFT' ) : vawc_t( 'ОПУБЛІКУВАТИ', 'PUBLISH' ) ),
-		'saving'     => '⏳ ' . vawc_t( 'Зберігаю...', 'Saving...' ),
-		'noSpeech'   => vawc_t( 'Ваш браузер не підтримує розпізнавання голосу. Використовуйте Chrome (Android/ПК) через HTTPS.', 'Your browser does not support speech recognition. Use Chrome (Android/PC) over HTTPS.' ),
-		'noCam'      => vawc_t( 'Камера недоступна. Можна додати фото з галереї.', 'Camera unavailable. You can add photos from the gallery.' ),
-		'listening'  => vawc_t( 'Слухаю…', 'Listening…' ),
-		'target'     => vawc_t( 'Диктуєте в поле', 'Dictating into' ),
-		'created'    => vawc_t( 'Створено!', 'Created!' ),
-		'edit'       => vawc_t( 'Відкрити', 'Open' ),
-		'limit'      => vawc_t( 'Безкоштовний ліміт вичерпано. Придбайте PRO.', 'Free limit reached. Please buy PRO.' ),
-		'bgWork'     => vawc_t( 'Прибираю фон', 'Removing background' ),
-		'bgFail'     => vawc_t( 'Не вдалося прибрати фон — збережено оригінал', 'Background removal failed — original saved' ),
-		'importing'  => vawc_t( 'Імпортую…', 'Importing…' ),
-		'importDone' => vawc_t( 'Імпорт завершено', 'Import finished' ),
-		'created_n'  => vawc_t( 'створено', 'created' ),
-		'failed_n'   => vawc_t( 'помилок', 'failed' ),
-		'pickCsv'    => vawc_t( 'Виберіть CSV-файл', 'Choose a CSV file' ),
-		'netErr'     => vawc_t( 'Помилка зʼєднання', 'Connection error' ),
-		'remove'     => vawc_t( 'Натисніть, щоб видалити фото', 'Tap to remove photo' ),
-		'printTitle' => vawc_t( 'Інструкція', 'Instruction' ),
-	);
-	wp_localize_script(
-		'vawc-app',
-		'VA_CFG',
-		array(
-			'ajax'    => admin_url( 'admin-ajax.php' ),
-			'nonce'   => wp_create_nonce( 'vawc_nonce' ),
-			'actions' => array( 'save' => 'vawc_save', 'bg' => 'vawc_remove_bg', 'import' => 'vawc_import',  ),
-			'attrNames' => array_map( function ( $a ) { return $a['label']; }, vawc_attr_defs() ),
-			'lang'    => vawc_en() ? 'en-US' : 'uk-UA',
-			'hasRbg'  => '' !== (string) get_option( 'vawc_rbg_api', '' ),
-			'fields'  => $fields,
-			'tpl'     => vawc_template(),
-			'S'       => $S,
-		)
-	);
-} );
-
-function vawc_page_main() {
-	if ( ! current_user_can( 'vawc_use' ) ) {
-		wp_die( esc_html( vawc_t( 'Доступ заборонено', 'Access denied' ) ) );
-	}
-	$pro     = vawc_is_pro();
 	$draft   = '1' === get_option( 'vawc_draft', '1' );
-	$has_rbg = '' !== (string) get_option( 'vawc_rbg_api', '' );
 	$exp_url = add_query_arg( array( 'action' => 'vawc_export', 'nonce' => wp_create_nonce( 'vawc_nonce' ) ), admin_url( 'admin-ajax.php' ) );
 	?>
 	<div class="wrap va-wrap" id="va_app">
@@ -777,37 +332,10 @@ function vawc_page_main() {
 			</div>
 		</div>
 
-		<?php $pst = vawc_pro_state(); ?>
-		<?php if ( $pro ) : ?>
-			<div class="va-pro-bar va-pro-ok">✅ PRO — <?php echo esc_html( vawc_t( 'необмежена кількість товарів', 'unlimited products' ) ); ?></div>
-		<?php else : ?>
-			<div class="va-pro-card">
-				<div class="va-pro-card__top">
-					<strong>FREE — <?php echo esc_html( vawc_t( 'безкоштовний тариф', 'free plan' ) ); ?></strong>
-					<span>📦 <?php echo esc_html( vawc_t( 'Залишилося товарів:', 'Products remaining:' ) ); ?> <strong id="va_left"><?php echo (int) vawc_remaining(); ?></strong> / <?php echo (int) vawc_limit(); ?></span>
-				</div>
-				<p><?php echo esc_html( vawc_t( 'Безкоштовно можна створити 25 товарів. Рекомендуємо оформити PRO до вичерпання безкоштовного ліміту, щоб і надалі створювати товари без обмежень.', 'Create 25 products for free. We recommend upgrading to PRO before reaching the free limit to continue creating products without restrictions.' ) ); ?></p>
-				<div class="va-pro-card__upgrade">
-					<div><strong>PRO</strong> <?php $vawc_price = vawc_pro_price(); if ( $vawc_price ) : ?>· <?php echo esc_html( $vawc_price ); ?><?php else : ?>· <?php echo esc_html( vawc_t( 'Ціна тимчасово недоступна', 'Price temporarily unavailable' ) ); ?><?php endif; ?></div>
-					<?php echo vawc_buy_button( vawc_t( 'Придбати PRO', 'Buy PRO' ) ); // phpcs:ignore ?>
-				</div>
-				<small><?php echo esc_html( vawc_t( 'Разова оплата · безстроковий доступ · безкоштовні оновлення · пріоритетна підтримка. Якщо валюта оплати відрізняється від гривні, банк покупця перерахує суму в гривні за власним курсом.', 'One-time payment · lifetime access · free updates · priority support. If the payment currency differs from UAH, the buyer’s bank converts the amount into UAH using its own exchange rate.' ) ); ?></small>
-			</div>
-		<?php endif; ?>
+		<?php echo wp_kses_post( vawc_pro_promo_html() ); ?>
 
 		<video id="va_cam" autoplay playsinline muted></video>
 		<div id="va_gal" class="va-gal"></div>
-
-		<div id="va_bg_wrap" class="va-bg" style="display:none">
-			<strong><?php echo esc_html( vawc_t( 'Фон:', 'Background:' ) ); ?></strong>
-			<?php if ( $has_rbg ) : ?>
-				<label><input type="radio" name="va_bg" value="original" checked> <?php echo esc_html( vawc_t( 'Оригінал', 'Original' ) ); ?></label>
-				<label><input type="radio" name="va_bg" value="transparent"> <?php echo esc_html( vawc_t( 'Прозорий', 'Transparent' ) ); ?></label>
-				<label><input type="radio" name="va_bg" value="ffffff"> <?php echo esc_html( vawc_t( 'Білий', 'White' ) ); ?></label>
-			<?php else : ?>
-				<span class="va-muted"><?php echo esc_html( vawc_t( 'вкажіть Remove.bg API Key в налаштуваннях', 'set the Remove.bg API key in settings' ) ); ?></span>
-			<?php endif; ?>
-		</div>
 
 		<div class="va-row">
 			<button type="button" id="va_photo" class="va-btn va-blue" style="flex:3">📷 <?php echo esc_html( vawc_t( 'ФОТО', 'PHOTO' ) ); ?></button>
@@ -899,12 +427,6 @@ function vawc_render_instructions() {
 	echo '<p>' . esc_html( vawc_t( 'Кілька значень (категорії, мітки, значення атрибутів) розділяйте комою. Колонка Images — посилання на фото через кому. Натисніть «Шаблон CSV», щоб завантажити готовий приклад.', 'Separate multiple values (categories, tags, attribute values) with commas. The Images column holds photo URLs separated by commas. Press “CSV template” to download a ready example.' ) ) . '</p>';
 	vawc_instr_close();
 
-	// Фон
-	vawc_instr_open( 'va_i_bg', vawc_t( 'Фото та прибирання фону', 'Photos and background removal' ) );
-	echo '<ul><li>' . esc_html( vawc_t( 'Кнопка «ФОТО» знімає з камери, «З ГАЛЕРЕЇ» — додає готові фото. Натисніть на мініатюру, щоб видалити.', '“PHOTO” shoots from the camera, “GALLERY” adds existing photos. Tap a thumbnail to delete it.' ) ) . '</li>';
-	echo '<li>' . esc_html( vawc_t( 'Фон: «Оригінал» — без змін; «Прозорий» — PNG без фону; «Білий» — чисто білий фон. Працює через remove.bg (ключ у налаштуваннях).', 'Background: “Original” — unchanged; “Transparent” — PNG with no background; “White” — plain white. Powered by remove.bg (key in settings).' ) ) . '</li>';
-	echo '<li>' . esc_html( vawc_t( 'Перше фото стає головним.', 'The first photo becomes the main one.' ) ) . '</li></ul>';
-	vawc_instr_close();
 }
 
 /* ====================================================================== */
@@ -920,11 +442,7 @@ function vawc_ajax_guard() {
 }
 
 add_action( 'wp_ajax_vawc_save', function () {
-	check_ajax_referer( 'vawc_nonce', 'nonce' );
 	vawc_ajax_guard();
-	if ( ! vawc_can_create( 1 ) ) {
-		wp_send_json_error( vawc_t( 'Безкоштовний ліміт вичерпано. Придбайте PRO.', 'Free limit reached. Please buy PRO.' ) );
-	}
 	$raw  = sanitize_textarea_field( wp_unslash( isset( $_POST['text'] ) ? $_POST['text'] : '' ) );
 	$imgs = json_decode( sanitize_text_field( wp_unslash( isset( $_POST['images'] ) ? $_POST['images'] : '[]' ) ), true );
 	$imgs = is_array( $imgs ) ? $imgs : array();
@@ -933,40 +451,7 @@ add_action( 'wp_ajax_vawc_save', function () {
 	if ( is_wp_error( $res ) ) {
 		wp_send_json_error( $res->get_error_message() );
 	}
-	if ( ! vawc_is_pro() ) {
-		vawc_inc( 1 );
-	}
-	$res['left'] = vawc_is_pro() ? -1 : vawc_remaining();
 	wp_send_json_success( $res );
-} );
-
-add_action( 'wp_ajax_vawc_remove_bg', function () {
-	vawc_ajax_guard();
-	$key = (string) get_option( 'vawc_rbg_api', '' );
-	if ( '' === $key ) {
-		wp_send_json_error( 'No API key' );
-	}
-	$img = wp_unslash( isset( $_POST['image'] ) ? $_POST['image'] : '' );
-	$bg  = isset( $_POST['bg'] ) ? sanitize_key( $_POST['bg'] ) : 'transparent';
-	$p   = is_string( $img ) ? strpos( $img, 'base64,' ) : false;
-	if ( false === $p ) {
-		wp_send_json_error( 'Bad image' );
-	}
-	$body = array( 'image_file_b64' => substr( $img, $p + 7 ), 'size' => 'auto', 'format' => 'png' );
-	if ( 'ffffff' === $bg ) {
-		$body['bg_color'] = 'ffffff';
-	}
-	$r = wp_remote_post( 'https://api.remove.bg/v1.0/removebg', array( 'timeout' => 90, 'headers' => array( 'X-Api-Key' => $key ), 'body' => $body ) );
-	if ( is_wp_error( $r ) ) {
-		wp_send_json_error( $r->get_error_message() );
-	}
-	$code = (int) wp_remote_retrieve_response_code( $r );
-	if ( 200 !== $code ) {
-		$j   = json_decode( wp_remote_retrieve_body( $r ), true );
-		$err = isset( $j['errors'][0]['title'] ) ? $j['errors'][0]['title'] : 'HTTP ' . $code;
-		wp_send_json_error( $err );
-	}
-	wp_send_json_success( array( 'image' => 'data:image/png;base64,' . base64_encode( wp_remote_retrieve_body( $r ) ) ) );
 } );
 
 /* ---------- CSV ---------- */
@@ -989,8 +474,13 @@ function vawc_csv_header_map( array $header ) {
 /** Імпорт із вже прочитаного тексту CSV (використовується AJAX-обробником і тестами). */
 function vawc_import_csv_text( $content ) {
 	$content = preg_replace( '/^\xEF\xBB\xBF/', '', (string) $content );
-	if ( ! mb_check_encoding( $content, 'UTF-8' ) ) {
+	if ( function_exists( 'mb_check_encoding' ) && ! mb_check_encoding( $content, 'UTF-8' ) && function_exists( 'mb_convert_encoding' ) ) {
 		$content = mb_convert_encoding( $content, 'UTF-8', 'Windows-1251' );
+	} elseif ( ! function_exists( 'mb_check_encoding' ) && function_exists( 'iconv' ) ) {
+		$converted = iconv( 'Windows-1251', 'UTF-8//IGNORE', $content );
+		if ( false !== $converted ) {
+			$content = $converted;
+		}
 	}
 	$first = strtok( $content, "\n" );
 	$delim = ( substr_count( (string) $first, ';' ) >= substr_count( (string) $first, ',' ) ) ? ';' : ',';
@@ -1006,17 +496,12 @@ function vawc_import_csv_text( $content ) {
 	if ( ! $hmap ) {
 		return new WP_Error( 'cols', vawc_t( 'Не знайдено відомих колонок. Завантажте шаблон CSV.', 'No known columns found. Download the CSV template.' ) );
 	}
-	@set_time_limit( 300 );
-	$created = 0; $failed = 0; $errors = array(); $stopped = false; $rows = 0;
+	$created = 0; $failed = 0; $errors = array(); $rows = 0;
 	while ( ( $row = fgetcsv( $fh, 0, $delim ) ) !== false && $rows < 500 ) {
 		if ( 1 === count( $row ) && '' === trim( (string) $row[0] ) ) {
 			continue;
 		}
 		$rows++;
-		if ( ! vawc_can_create( 1 ) ) {
-			$stopped = true;
-			break;
-		}
 		$data = array(); $urls = array();
 		foreach ( $hmap as $i => $key ) {
 			$v = isset( $row[ $i ] ) ? trim( (string) $row[ $i ] ) : '';
@@ -1038,12 +523,9 @@ function vawc_import_csv_text( $content ) {
 			continue;
 		}
 		$created++;
-		if ( ! vawc_is_pro() ) {
-			vawc_inc( 1 );
-		}
 	}
 	fclose( $fh );
-	return array( 'created' => $created, 'failed' => $failed, 'errors' => $errors, 'stopped' => $stopped, 'left' => vawc_is_pro() ? -1 : vawc_remaining() );
+	return array( 'created' => $created, 'failed' => $failed, 'errors' => $errors, 'stopped' => false );
 }
 
 add_action( 'wp_ajax_vawc_import', function () {
