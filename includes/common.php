@@ -1,6 +1,6 @@
 <?php
 /**
- * Спільне ядро Voice ADD (Voice ADD for WooCommerce PRO).
+ * Спільне ядро Voice ADD for WooCommerce.
  * Language, roles, permissions, settings, product creation and CSV tools.
  */
 if ( ! defined( 'ABSPATH' ) ) {
@@ -323,7 +323,7 @@ function vawc_page_settings() {
 	?>
 	<div class="wrap va-wrap" id="va_app">
 		<div class="va-head">
-			<h1>🎤 Voice ADD for WooCommerce PRO <sup>v<?php echo esc_html( VAWC_VERSION ); ?></sup></h1>
+			<h1>🎤 Voice ADD for WooCommerce <sup>v<?php echo esc_html( VAWC_VERSION ); ?></sup></h1>
 			<div class="va-head-btns">
 				<button type="button" class="button" id="va_go_instr">📖 <?php echo esc_html( vawc_t( 'Інструкція', 'Instructions' ) ); ?></button>
 				<?php if ( current_user_can( 'manage_options' ) ) : ?>
@@ -378,7 +378,7 @@ function vawc_page_settings() {
 }
 
 /* ====================================================================== */
-/* 10. ІНСТРУКЦІЇ (поля підтягуються з магазину / HivePress)               */
+/* 10. ІНСТРУКЦІЇ (поля WooCommerce)               */
 /* ====================================================================== */
 function vawc_instr_open( $id, $title ) {
 	echo '<section class="va-instr" id="' . esc_attr( $id ) . '"><div class="va-instr-head"><h3>' . esc_html( $title ) . '</h3>';
