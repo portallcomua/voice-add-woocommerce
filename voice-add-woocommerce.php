@@ -12,7 +12,6 @@
  * Requires at least: 5.8
  * Requires PHP: 7.4
  * WC requires at least: 6.0
- * WC tested up to: 11.3.1
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -24,18 +23,10 @@ define( 'VAWC_FILE', __FILE__ );
 define( 'VAWC_DIR', plugin_dir_path( __FILE__ ) );
 define( 'VAWC_URL', plugin_dir_url( __FILE__ ) );
 
-// WooCommerce: плагін працює лише через CRUD товарів і не чіпає замовлення, кошик, листи чи аналітику —
-// тому оголошуємо сумісність з УСІМА функціями WooCommerce (HPOS, блоки, email, аналітика, POS тощо).
+// The plugin creates and edits products through WooCommerce CRUD objects and does not access orders.
 add_action( 'before_woocommerce_init', function () {
-	if ( ! class_exists( \Automattic\WooCommerce\Utilities\FeaturesUtil::class ) ) {
-		return;
-	}
-	$features = array( 'custom_order_tables', 'cart_checkout_blocks', 'product_block_editor', 'analytics', 'marketplace', 'order_attribution', 'remote_logging', 'email_improvements', 'block_email_editor', 'blueprint', 'point_of_sale', 'site_visibility_badge', 'rate_limit_checkout', 'fulfillments', 'cost_of_goods_sold' );
-	if ( method_exists( \Automattic\WooCommerce\Utilities\FeaturesUtil::class, 'get_features' ) ) {
-		$features = array_merge( $features, array_keys( (array) \Automattic\WooCommerce\Utilities\FeaturesUtil::get_features( true ) ) );
-	}
-	foreach ( array_unique( $features ) as $feature_id ) {
-		\Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility( $feature_id, VAWC_FILE, true );
+	if ( class_exists( \\Automattic\\WooCommerce\\Utilities\\FeaturesUtil::class ) ) {
+		\\Automattic\\WooCommerce\\Utilities\\FeaturesUtil::declare_compatibility( 'custom_order_tables', VAWC_FILE, true );
 	}
 } );
 
