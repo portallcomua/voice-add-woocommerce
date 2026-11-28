@@ -1,4 +1,4 @@
-/* Voice ADD — диктовка з маяками, фото, фон, CSV, друк інструкцій */
+/* Voice ADD — диктовка з маяками, фото, CSV, друк інструкцій */
 (function () {
 	'use strict';
 	var C = window.VA_CFG;
@@ -298,7 +298,7 @@
 	}
 
 	/* ---------- Фото ---------- */
-	var cam = $('va_cam'), gal = $('va_gal'), bgWrap = $('va_bg_wrap');
+	var cam = $('va_cam'), gal = $('va_gal');
 
 	if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
 		navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
@@ -315,17 +315,15 @@
 	}
 
 	function addPhoto(data) {
-		var p = { data: data, processed: 'original' };
+		var p = { data: data };
 		var img = document.createElement('img');
 		img.src = data; img.title = S.remove; img.className = 'va-thumb';
 		img.addEventListener('click', function () {
 			photos.splice(photos.indexOf(p), 1); img.remove();
-			if (!photos.length && bgWrap) { bgWrap.style.display = 'none'; }
 		});
 		p.el = img;
 		photos.push(p);
 		gal.appendChild(img);
-		if (bgWrap) { bgWrap.style.display = 'block'; }
 	}
 
 	$('va_photo').addEventListener('click', function () {
@@ -343,14 +341,7 @@
 	});
 	$('va_clr').addEventListener('click', function () {
 		photos = []; gal.innerHTML = '';
-		if (bgWrap) { bgWrap.style.display = 'none'; }
 	});
-
-	function getBg() {
-		var r = document.querySelectorAll('input[name="va_bg"]');
-		for (var i = 0; i < r.length; i++) { if (r[i].checked) { return r[i].value; } }
-		return 'original';
-	}
 
 	function post(fd) {
 		return fetch(C.ajax, { method: 'POST', credentials: 'same-origin', body: fd }).then(function (r) { return r.json(); });
@@ -364,24 +355,7 @@
 
 	btnSave.addEventListener('click', async function () {
 		btnSave.disabled = true; btnSave.textContent = S.saving;
-		var warnBg = false;
 		try {
-			var bg = getBg();
-			if (C.hasRbg && bg !== 'original') {
-				for (var i = 0; i < photos.length; i++) {
-					if (photos[i].processed === bg) { continue; }
-					say(msg, '⏳ ' + S.bgWork + ' ' + (i + 1) + '/' + photos.length + '…');
-					var fd0 = new FormData();
-					fd0.append('action', C.actions.bg); fd0.append('nonce', C.nonce);
-					fd0.append('image', photos[i].data); fd0.append('bg', bg);
-					try {
-						var r0 = await post(fd0);
-						if (r0.success && r0.data && r0.data.image) {
-							photos[i].data = r0.data.image; photos[i].processed = bg; photos[i].el.src = r0.data.image;
-						} else { warnBg = true; }
-					} catch (e0) { warnBg = true; }
-				}
-			}
 			var fd = new FormData();
 			fd.append('action', C.actions.save); fd.append('nonce', C.nonce);
 			fd.append('text', ta.value);
@@ -390,19 +364,10 @@
 			if (res.success) {
 				var d = res.data, html = '✅ ' + S.created + ' <a href="' + esc(d.edit || '#') + '" target="_blank" rel="noopener">' + esc(d.title || '') + ' (ID ' + d.id + ')</a>';
 				if (d.variations) { html += ' · ' + d.variations + ' var.'; }
-				if (warnBg) { html += '<br>⚠️ ' + S.bgFail; }
 				(d.warnings || []).forEach(function (w) { html += '<br>⚠️ ' + esc(w); });
 				say(msg, html, 'is-ok');
-				photos = []; gal.innerHTML = ''; if (bgWrap) { bgWrap.style.display = 'none'; }
+				photos = []; gal.innerHTML = '';
 				ta.value = C.tpl; activeLine = -1; activeDef = null; box.hidden = true;
-				if (typeof d.left === 'number' && d.left >= 0) {
-					if ($('va_left')) { $('va_left').textContent = d.left; }
-					var createdCounter = $('va_created');
-					if (createdCounter) {
-						var totalLimit = parseInt(createdCounter.getAttribute('data-limit') || '25', 10);
-						createdCounter.textContent = Math.max(0, totalLimit - d.left);
-					}
-				}
 			} else {
 				say(msg, '❌ ' + esc(String(res.data || 'Error')), 'is-err');
 			}
@@ -425,17 +390,8 @@
 				var r = await post(fd);
 				if (r.success) {
 					var d = r.data, h = '✅ ' + S.importDone + ': ' + d.created + ' ' + S.created_n + ', ' + d.failed + ' ' + S.failed_n;
-					if (d.stopped) { h += '<br>⚠️ ' + S.limit; }
 					(d.errors || []).forEach(function (e) { h += '<br>• ' + esc(e); });
 					say(out, h, d.failed ? 'is-err' : 'is-ok');
-					if (typeof d.left === 'number' && d.left >= 0) {
-					if ($('va_left')) { $('va_left').textContent = d.left; }
-					var createdCounter = $('va_created');
-					if (createdCounter) {
-						var totalLimit = parseInt(createdCounter.getAttribute('data-limit') || '25', 10);
-						createdCounter.textContent = Math.max(0, totalLimit - d.left);
-					}
-				}
 				} else { say(out, '❌ ' + esc(String(r.data || 'Error')), 'is-err'); }
 			} catch (e) { say(out, '❌ ' + S.netErr, 'is-err'); }
 			imp.disabled = false;
