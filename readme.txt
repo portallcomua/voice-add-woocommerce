@@ -62,7 +62,7 @@ No. Voice recognition is provided by the browser and its configured speech recog
 
 = Can I import images from URLs in a CSV file? =
 
-Yes. When you import a CSV containing image URLs, your WordPress server downloads those images from the URLs you supplied and adds them to the Media Library.
+Yes. When you import a CSV containing image URLs, your WordPress server downloads those images from the URLs you supplied and adds them to the Media Library. Each CSV upload can be up to 5 MB.
 
 = How can I contact support? =
 
