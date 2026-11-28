@@ -25,8 +25,9 @@ define( 'VAWC_URL', plugin_dir_url( __FILE__ ) );
 
 // The plugin creates and edits products through WooCommerce CRUD objects and does not access orders.
 add_action( 'before_woocommerce_init', function () {
-	if ( class_exists( \Automattic\WooCommerce\Utilities\\FeaturesUtil::class ) ) {
-		\\Automattic\\WooCommerce\\Utilities\\FeaturesUtil::declare_compatibility( 'custom_order_tables', VAWC_FILE, true );
+	$features_util = 'Automattic\\WooCommerce\\Utilities\\FeaturesUtil';
+	if ( class_exists( $features_util ) ) {
+		call_user_func( array( $features_util, 'declare_compatibility' ), 'custom_order_tables', VAWC_FILE, true );
 	}
 } );
 
