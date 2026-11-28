@@ -399,6 +399,7 @@ add_action( 'admin_enqueue_scripts', function ( $hook ) {
 		'saving'     => '⏳ ' . vawc_t( 'Зберігаю...', 'Saving...' ),
 		'noSpeech'   => vawc_t( 'Ваш браузер не підтримує розпізнавання голосу. Використовуйте Chrome (Android/ПК) через HTTPS.', 'Your browser does not support speech recognition. Use Chrome (Android/PC) over HTTPS.' ),
 		'noCam'      => vawc_t( 'Камера недоступна. Можна додати фото з галереї.', 'Camera unavailable. You can add photos from the gallery.' ),
+		'cameraReady' => vawc_t( 'Камера готова. Натисніть «ФОТО» ще раз, щоб зробити знімок.', 'Camera ready. Press PHOTO again to take a picture.' ),
 		'listening'  => vawc_t( 'Слухаю…', 'Listening…' ),
 		'target'     => vawc_t( 'Диктуєте в поле', 'Dictating into' ),
 		'created'    => vawc_t( 'Створено!', 'Created!' ),
