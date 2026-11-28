@@ -162,7 +162,7 @@ function vawc_csv_example_rows( $cols ) {
 }
 function vawc_csv_export_rows( $cols ) {
 	$rows = array();
-	$ids  = wc_get_products( array( 'limit' => 2000, 'status' => array( 'publish', 'draft', 'private', 'pending' ), 'return' => 'objects', 'orderby' => 'date', 'order' => 'DESC' ) );
+	$ids  = wc_get_products( array( 'limit' => -1, 'status' => array( 'publish', 'draft', 'private', 'pending' ), 'return' => 'objects', 'orderby' => 'date', 'order' => 'DESC' ) );
 	foreach ( $ids as $p ) {
 		$pid  = $p->get_id();
 		$imgs = array();
