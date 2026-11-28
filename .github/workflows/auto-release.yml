@@ -99,5 +99,8 @@ jobs:
               --generate-notes
           fi
 
-          gh release upload "$NEW_TAG" voice-add-woocommerce.zip --clobber
+          if gh release view "$NEW_TAG" --json assets --jq '.assets[].name' | grep -Fxq 'voice-add-woocommerce.zip'; then
+  gh release delete-asset "$NEW_TAG" voice-add-woocommerce.zip --yes
+fi
+gh release upload "$NEW_TAG" voice-add-woocommerce.zip
           echo "Published installable ZIP for $NEW_TAG"
