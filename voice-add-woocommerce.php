@@ -3,7 +3,7 @@
  * Plugin Name: Voice ADD for WooCommerce
  * Plugin URI:  https://github.com/portallcomua/voice-add-woocommerce
  * Description: Create WooCommerce products by voice, photos, attributes, variations and CSV import/export.
- * Version:     4.0.1
+ * Version:     4.0.2
  * Author:      UAServer
  * Author URI:  https://uaserver.pp.ua/
  * License:     GPLv2 or later
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'VAWC_VERSION', '4.0.1' );
+define( 'VAWC_VERSION', '4.0.2' );
 define( 'VAWC_FILE', __FILE__ );
 define( 'VAWC_DIR', plugin_dir_path( __FILE__ ) );
 define( 'VAWC_URL', plugin_dir_url( __FILE__ ) );
