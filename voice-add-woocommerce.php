@@ -11,6 +11,7 @@
  * Text Domain: voice-add-woocommerce
  * Requires at least: 5.8
  * Requires PHP: 7.4
+ * Requires Plugins: woocommerce
  * WC requires at least: 6.0
  */
 
