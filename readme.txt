@@ -3,7 +3,7 @@ Contributors: portallcomua
 Tags: woocommerce, voice, products, csv, microphone
 Requires at least: 5.8
 Requires PHP: 7.4
-Stable tag: 4.0.0
+Stable tag: 4.0.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -94,7 +94,7 @@ The plugin stores its settings in the WordPress options table and uses WordPress
 
 == Changelog ==
 
-= 4.0.0 =
+= 4.0.1 =
 * Prepared the free edition for the WordPress.org Plugin Directory.
 * Removed external license checks, payment integrations and GitHub-based plugin updates.
 * Removed the product quota: product creation and CSV import are not paywalled.
